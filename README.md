@@ -10,6 +10,8 @@ I'm not trying to suggest any best practices here, just supply a file which make
 Sometimes the CIS benchmarks specify a piece of configuration which comes as standard in the default CentOS install.
 In centos7-cis-ks.cfg there is some inconsistency of method in that occasionally I've specified these 'default' pieces  of config anyway as I don't think it'll do any harm and other times I haven't.
 
+TODO check/review 7.1.3 PASS_WARN_AGE
+
 Feel free to get in touch about this.  Particularly with any errors or bugs!
 
 Ross Hamilton <ross.x.hamilton AT gmail.com>
