@@ -4,7 +4,7 @@ Aforementioned CIS benchmarks should be able to be found here https://benchmarks
 
 A minimal kickstart file (minimal-ks.cfg) is provided so people can test their setup (PXE/DHCP etc) with the minimal amount of configuration going on.
 
-centos7-cis-ks.cfg will need extensive customising to suit a particular user's environment.  
+centos7-cis-ks.cfg will need extensive customising to suit a particular user's environment.  There's a lot of config in there because it suits me. e.g. CIS 6.4 /etc/securetty, change it to suit yourself. 
 I'm not trying to suggest any best practices here, just supply a file which makes it easier to meet the CIS requirements.
 
 Sometimes the CIS benchmarks specify a piece of configuration which comes as standard in the default CentOS install.
