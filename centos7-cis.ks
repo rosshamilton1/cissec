@@ -28,11 +28,10 @@ logvol /var/log/audit --vgname vg_root --name audit --size=1024
 # CIS 1.1.9-1.1.0
 logvol /home --vgname vg_root --name home --size=1024 --grow --fsoptions="nodev"
 	 
-rootpw qwerty
-#rootpw --iscrypted $6$b6FRRujQ$5bmbf.qHHJT8QdoksT780UaH2VL1r/bF5bq3L0GL1QvnXaUvG8w5H9UJhkSvrKwuTNUC0JXvHFEjsAxouaMi0/
+rootpw yourpasswordhere
 
-repo --name=base --baseurl="http://anorien.csc.warwick.ac.uk/mirrors/centos/7/isos/x86_64/" 
-url --url="http://anorien.csc.warwick.ac.uk/mirrors/centos/7/isos/x86_64/" 
+repo --name=base --baseurl="http://mirrors.kernel.org/centos/7/os/x86_64/"
+url --url="http://mirrors.kernel.org/centos/7/os/x86_64/"
 
 %packages --ignoremissing
 @core
@@ -95,10 +94,17 @@ rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7	# CIS 1.2.1
 /usr/bin/systemctl enable crond				# CIS 6.1.2
 
 # Set bootloader password				# CIS 1.5.3
-cat << EOF >> /etc/grub.d/00_header
+cat << EOF2 >> /etc/grub.d/01_users
+#!/bin/sh -e
+
+cat << EOF
 set superusers="bootuser"
 password_pbkdf2 bootuser grub.pbkdf2.sha512.10000.FE4D934335A0A9CB1B8E748713D1BDE766BB4041DEB297DB11674A1270BFC9B934C054B1BFEE8839AF9AE7DAD1F70D34D919FB617F09606636AC0EBE680F48FF.E01B493CA2F06BB62E03164F97FC98D6DB6A61BA5603DB299F98B5A08DE519C48730ECBBA0EB86BCE0DCFB02AF4C6EE19D9DF17F214CAE502D2078B4B8C59AC7
 EOF
+EOF2
+
+grub_cfg='/boot/grub2/grub.cfg'
+grub2-mkconfig -o ${grub_cfg}
 
 # Restrict Core Dumps					# CIS 1.6.1
 echo \* hard core 0 >> /etc/security/limits.conf
@@ -135,11 +141,11 @@ cd /usr/lib/systemd/system				# CIS 3.2
 rm default.target
 ln -s multi-user.target default.target
 
-ntp_conf=/etc/ntp.conf
+ntp_conf='/etc/ntp.conf'
 sed -i "s/^restrict default/restrict default kod/" ${ntp_conf}
-line_num=$(grep -n "^restrict default" ${ntp_conf} | cut -f1 -d:)
+line_num="$(grep -n "^restrict default" ${ntp_conf} | cut -f1 -d:)"
 sed -i "${line_num} a restrict -6 default kod nomodify notrap nopeer noquery" ${ntp_conf}
-sed -i s/'^OPTIONS="-g"'/'OPTIONS="-g -u ntp:ntp"'/ /etc/sysconfig/ntpd
+sed -i s/'^OPTIONS="-g"'/'OPTIONS="-g -u ntp:ntp -p /var/run/ntpd.pid"'/ /etc/sysconfig/ntpd
 
 echo "ALL: ALL" >> /etc/hosts.deny			# CIS 4.5.4
 chown root:root /etc/hosts.deny				# CIS 4.5.5
@@ -253,7 +259,7 @@ EOF
 
 sed -i "1 i /var/log/boot.log" /etc/logrotate.d/syslog 			# CIS 5.3
 
-sshd_config=/etc/ssh/sshd_config				
+sshd_config='/etc/ssh/sshd_config'
 sed -i "s/\#Protocol/Protocol/" ${sshd_config}				# CIS 6.2.1
 sed -i "s/\#LogLevel/LogLevel/" ${sshd_config}				# CIS 6.2.2
 chown root:root ${sshd_config}						# CIS 6.2.3
@@ -273,14 +279,13 @@ sed -i "s/\#Banner none/Banner \/etc\/issue/" ${sshd_config}    	# CIS 6.2.12
 
 
 login_defs=/etc/login.defs
-line_num=$(grep -n ^PASS_MAX_DAYS ${login_defs} | cut -d: -f1)
-sed -i ${line_num}s/99999/90/ ${login_defs}  				# CIS 7.1.1
-line_num=$(grep -n ^PASS_MIN_DAYS ${login_defs} | cut -d: -f1)
-sed -i ${line_num}s/0/7/ ${login_defs}  				# CIS 7.1.2
+sed -i 's/^PASS_MAX_DAYS.*$/PASS_MAX_DAYS 90/' ${login_defs}		# CIS 7.1.1
+sed -i 's/^PASS_MIN_DAYS.*$/PASS_MIN_DAYS 7/' ${login_defs}		# CIS 7.1.2
+sed -i 's/^PASS_WARN_AGE.*$/PASS_WARN_AGE 7/' ${login_defs}		# CIS 7.1.3
 
 usermod -g 0 root							# CIS 7.3
 
-bashrc=/etc/bashrc
+bashrc='/etc/bashrc'
 #first umask cmd sets it for users, second umask cmd sets it for system reserved uids
 #we want to alter the first one
 line_num=$(grep -n "^[[:space:]]*umask" ${bashrc} | head -1 | cut -d: -f1)
@@ -292,7 +297,8 @@ touch /etc/issue /etc/issue.net
 chown root:root /etc/issue /etc/issue.net
 chmod 644 /etc/issue /etc/issue.net
 
-chmod 600 /boot/grub2/grub.cfg					# CIS 1.5.2
+chown root:root ${grub_cfg}					# CIS 1.5.1
+chmod 600 ${grub_cfg}						# CIS 1.5.2
 chmod 644 /etc/passwd						# CIS 9.1.2
 chmod 000 /etc/shadow						# CIS 9.1.3
 chmod 000 /etc/gshadow						# CIS 9.1.4
@@ -312,7 +318,7 @@ lcredit=-1
 EOF
 
 # CIS 6.3.3
-content=$(egrep -v "^#|^auth" /etc/pam.d/password-auth)
+content="$(egrep -v "^#|^auth" /etc/pam.d/password-auth)"
 echo -e "auth required pam_env.so
 auth required pam_faillock.so preauth audit silent deny=5 unlock_time=900
 auth [success=1 default=bad] pam_unix.so
@@ -320,15 +326,16 @@ auth [default=die] pam_faillock.so authfail audit deny=5 unlock_time=900
 auth sufficient pam_faillock.so authsucc audit deny=5 unlock_time=900
 auth required pam_deny.so\n$content" > /etc/pam.d/password-auth
 
-content=$(egrep -v "^#|^auth" /etc/pam.d/system-auth)
+system_auth='/etc/pam.d/system-auth'
+content="$(egrep -v "^#|^auth" ${system_auth})"
 echo -e "auth required pam_env.so
 auth required pam_faillock.so preauth audit silent deny=5 unlock_time=900
 auth [success=1 default=bad] pam_unix.so
 auth [default=die] pam_faillock.so authfail audit deny=5 unlock_time=900
 auth sufficient pam_faillock.so authsucc audit deny=5 unlock_time=900
-auth required pam_deny.so\n$content" > /etc/pam.d/system-auth
+auth required pam_deny.so\n$content" > ${system_auth}
 
-sed -i s/'^password sufficient pam_unix.so'/'password sufficient pam_unix.so remember=5'/ /etc/pam.d/system-auth
+sed -i s/'^password sufficient pam_unix.so'/'password sufficient pam_unix.so remember=5'/ ${system_auth}
 
 # CIS 6.4
 cp /etc/securetty /etc/securetty.orig
@@ -339,8 +346,8 @@ tty1
 EOF
 
 # CIS 6.5
-pam_su=/etc/pam.d/su
-line_num=$(grep -n "^\#auth[[:space:]]*required[[:space:]]*pam_wheel.so[[:space:]]*use_uid" ${pam_su} | cut -d: -f1)
+pam_su='/etc/pam.d/su'
+line_num="$(grep -n "^\#auth[[:space:]]*required[[:space:]]*pam_wheel.so[[:space:]]*use_uid" ${pam_su} | cut -d: -f1)"
 sed -i "${line_num} a auth		required	pam_wheel.so use_uid" ${pam_su}
 usermod -G wheel root
 
