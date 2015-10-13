@@ -1,0 +1,530 @@
+#!/bin/bash
+
+#https://benchmarks.cisecurity.org/tools2/linux/CIS_CentOS_Linux_7_Benchmark_v1.1.0.pdf
+
+E_NO_FS_TAB_OUTPUT=1
+E_NO_MOUNT_OUTPUT=2
+E_MOD_NOT_DISABLED=3
+E_MOD_LOADED=4
+E_NO_GPG_KEY=5
+E_NO_GPGCHECK=6
+E_YUM_NOT_UP2DATE=7
+E_PKG_INTEGRITY=8
+E_RPM_NOT_INSTALLED=9
+E_NO_AIDE_CRONJOB=10
+E_SELINUX_DISABLED=11
+E_SELINUX_NOTENFORCING=12
+E_SELINUX_NOTENABLED=13
+E_SELINUX_NOTTARGETED=14
+E_RPM_TXTOUT=15
+E_UNCONFINED_PROC=16
+E_GRUB_OWNERSHIP=17
+E_GRUB_PERMS=18
+E_NO_BOOT_SUPERUSER=19
+E_NO_BOOT_PASSWORD=20
+E_SVC_ENABLED=21
+E_RESTRICT_DEF=1
+E_RESTRICT_DEF_IP6=2
+E_NO_SERVER=3
+E_NTP_OPTIONS=4
+
+FSTAB='/etc/fstab'
+YUM_CONF='/etc/yum.conf'
+GRUB_CFG='/boot/grub2/grub.cfg'
+GRUB_DIR='/etc/grub.d'
+SELINUX_CFG='/etc/selinux/config'
+NTP_CONF='/etc/ntp.conf'
+SYSCON_NTPD='/etc/sysconfig/ntpd'
+
+function separate_partition {
+  # Test that the supplied $1 is a separate partition
+
+  local filesystem="${1}"
+  local grep_fstab
+  grep_fstab=$(grep "[[:space:]]${filesystem}[[:space:]]" ${FSTAB})
+  if [[ -z "${grep_fstab}" ]] ; then
+    return "${E_NO_FS_TAB_OUTPUT}"
+  fi
+}
+
+function mount_option {
+  # Test the the supplied mount option $2 is in use on the supplied filesystem $1
+
+  local filesystem="${1}"
+  local mnt_option="${2}"
+
+  local grep_fstab
+  grep_fstab=$(grep "[[:space:]]${filesystem}[[:space:]]" ${FSTAB} | grep "${mnt_option}")
+  if [[ -z "${grep_fstab}" ]] ; then
+    return "${E_NO_FS_TAB_OUTPUT}"
+  fi
+
+  local grep_mount
+  grep_mount=$(mount | grep "[[:space:]]${filesystem}[[:space:]]" | grep "${mnt_option}")
+  if [[ -z "${grep_mount}" ]] ; then
+    return "${E_NO_MOUNT_OUTPUT}"
+  fi  
+}
+
+function bind_mounted_to {
+  # Test that a directory /foo/dir is bind mounted onto a particular filesystem
+
+  local directory="${1}"
+  local filesystem="${2}"
+
+  local grep_fstab
+  grep_fstab=$(grep "^${filesystem}[[:space:]]" ${FSTAB} | grep "${directory}")
+  if [[ -z "${grep_fstab}" ]] ; then
+    return "${E_NO_FS_TAB_OUTPUT}"
+  fi
+
+  local grep_mount
+  grep_mount=$(mount | grep "^${filesystem}[[:space:]]" | grep "${directory}")
+  #If $directory doesn't appear in the mount output as mounted on the $filesystem  
+  #it may appear in the output as being mounted on the same device as $filesystem, check for this
+  local fs_dev
+  local dir_dev
+  fs_dev="$(mount | grep "[[:space:]]${filesystem}[[:space:]]" | cut -d" " -f1)"
+  dir_dev="$(mount | grep "[[:space:]]${directory}[[:space:]]" | cut -d" " -f1)"
+  if [[ -z "${grep_mount}" ]] && [[ "${fs_dev}" != "${dir_dev}" ]] ; then
+    return "${E_NO_MOUNT_OUTPUT}"
+  fi
+
+}
+
+function test_disable_mounting {
+  # Test the the supplied filesystem type $1 is disabled
+
+  local module="${1}"
+  modprobe -n -v ${module} 2> /dev/null | grep "install \+/bin/true" > /dev/null
+  return_codes=(${PIPESTATUS[*]})
+  if [[ "${return_codes[1]}" -ne 0 ]]; then
+    return "${E_MOD_NOT_DISABLED}"
+  fi
+
+  local lsmod_query
+  lsmod_query=$(lsmod | grep "${module}")
+  if [[ ! -z "${lsmod_query}" ]]; then
+    return "${E_MOD_LOADED}"
+  fi
+}
+
+function centos_gpg_key_installed {
+  # Test CentOS GPG Key is installed
+  local centos_off_str='gpg(CentOS-7 Key (CentOS 7 Official Signing Key) <security@centos.org>)'
+  rpm -q --queryformat "%{SUMMARY}\n" gpg-pubkey | grep "${centos_off_str}" > /dev/null
+  if [[ "$?" -ne 0 ]]; then
+    return "${E_NO_GPG_KEY}"
+  fi
+}
+
+function yum_gpgcheck {
+  # Check that gpgcheck is Globally Activated
+  local grep_out
+  grep_out="$(cut -d \# -f1 ${YUM_CONF} | grep 'gpgcheck')" 
+  local exp_string='gpgcheck=1'
+  if [[ "${grep_out}" != "${exp_string}" ]]; then
+    return "${E_NO_GPGCHECK}"
+  fi
+}
+
+function yum_update {
+  # Check for outstanding pkg update with yum
+  yum check-update > /dev/null 
+  if [[ "$?" -ne 0 ]] ; then
+    return "${E_YUM_NOT_UP2DATE}"
+  fi
+}
+
+function pkg_integrity {
+  # Verify the installed packages by comparing the installed files against file info stored in the pkg
+  local rpm_out
+  rpm_out="$(rpm -qVa | awk '$2 != "c" { print $0}')"
+  if [[ -n "${rpm_out}" ]]; then
+    return "${E_PKG_INTEGRITY}"  
+  fi
+}
+
+function rpm_installed {
+  # Test whether an rpm is installed
+
+  local rpm="${1}"
+  local rpm_out
+  rpm_out="$(rpm -q $rpm | cut -d- -f1)"
+  if [[ "${rpm_out}" != "${rpm}" ]]; then
+    return "${E_RPM_NOT_INSTALLED}"
+  fi
+}
+
+function verify_aide_cron {
+  # Verify there is a cron job scheduled to run the aide check
+
+  crontab -u root -l | cut -d\# -f1 | grep "aide \+--check"
+  if [[ "$?" -ne 0 ]]; then
+    return "${E_NO_AIDE_CRONJOB}"
+  fi
+}
+
+function verify_selinux_grubcfg {
+  # Verify SELinux is not disabled in grub.cfg file 
+
+  local grep_out1
+  grep_out1="$(grep selinux=0 ${GRUB_CFG})"
+  if [[ -n "${grep_out1}" ]]; then
+    return "${E_SELINUX_DISABLED}"
+  fi
+
+  local grep_out2
+  grep_out2="$(grep enforcing=0 ${GRUB_CFG})"
+  if [[ -n "${grep_out2}" ]]; then
+    return "${E_SELINUX_NOTENFORCING}"
+  fi
+}
+
+function verify_selinux_state {
+  # Verify SELinux configured state in /etc/selinux/config
+
+  local grep_out
+  grep_out="$(cut -d \# -f1 ${SELINUX_CFG} | grep 'SELINUXTYPE=' | tr -d '[[:space:]]')"
+  if [[ "${grep_out}" != "SELINUXTYPE=targeted" ]]; then
+    return "${E_SELINUX_NOTENABLED}"
+  fi
+}
+
+function verify_selinux_policy {
+  # Verify SELinux policy in /etc/selinux/config
+
+  local grep_out
+  grep_out="$(cut -d \# -f1 ${SELINUX_CFG} | grep 'SELINUXTYPE=' | tr -d '[[:space:]]')"
+  if [[ "${grep_out}" != "SELINUXTYPE=targeted" ]]; then
+    return "${E_SELINUX_NOTTARGETED}"
+  fi
+}
+
+function rpm_not_installed {
+
+  local rpm="${1}"
+  local rpm_out
+  rpm_out="$(rpm -q $rpm)"
+  local exp_string="package ${rpm} is not installed"
+  if [[ "${rpm_out}" != "${exp_string}" ]]; then
+    return "${E_RPM_TXTOUT}"
+  fi
+}
+
+function unconfined_procs {
+  # Test for unconfined daemons
+  
+  local ps_out
+  ps_out="$(ps -eZ | egrep 'initrc|unconfined' | egrep -v 'bash|ps|grep')"
+  if [[ -n "${ps_out}" ]]; then
+    return "${E_UNCONFINED_PROC}"
+  fi
+}
+
+function check_grub_owns {
+  # Check User/Group Owner on grub.cfg file
+  local stat_out
+  stat_out="$(stat -L -c "%u %g" ${GRUB_CFG} | grep '0 0')"
+  if [[ -z "${stat_out}" ]]; then
+    return "${E_GRUB_OWNERSHIP}"
+  fi
+}
+
+function check_grub_perms {
+  # Check Perms on grub.cfg file
+  local stat_out
+  stat_out="$(stat -L -c "%a" ${GRUB_CFG} | grep '.00')"
+  if [[ -z "${stat_out}" ]]; then
+    return "${E_GRUB_PERMS}"
+  fi
+}
+
+function check_boot_pass {
+
+  grep 'set superusers=' ${GRUB_CFG}
+  if [[ "$?" -ne 0 ]]; then
+    grep 'set superusers=' ${GRUB_DIR}/* 
+    if [[ "$?" -ne 0 ]]; then
+      return "${E_NO_BOOT_SUPERUSER}"
+    else  
+      file="$(grep 'set superusers' ${GRUB_DIR}/* | cut -d: -f1)"
+      grep 'password' ${file}
+      if [[ "$?" -ne 0 ]]; then
+        return "${E_NO_BOOT_PASSWORD}" 
+      fi 
+    fi
+  fi
+}
+
+function check_svc_not_enabled {
+  # Verify that the service $1 is not enabled
+  systemctl --quiet is-enabled "${service}" 
+  if [[ "$?" -eq 0 ]]; then
+    return "${E_SVC_ENABLED}"
+  fi
+}
+
+function ntp_cfg {
+  cut -d\# -f1 ${NTP_CONF} | egrep "restrict{1}[[:space:]]+default{1}" ${NTP_CONF} | grep kod \
+| grep nomodify | grep notrap | grep nopeer | grep noquery 
+  if [[ "$?" -ne 0 ]]; then
+    return "${E_RESTRICT_DEF}" 
+  fi 
+
+  cut -d\# -f1 ${NTP_CONF} | egrep "restrict{1}[[:space:]]+\-6{1}[[:space:]]+default" | grep kod \
+| grep nomodify | grep notrap | grep nopeer | grep noquery
+  if [[ "$?" -ne 0 ]]; then
+    return "${E_RESTRICT_DEF_IP6}" 
+  fi 
+
+  cut -d\# -f1 ${NTP_CONF} | egrep "^[[:space:]]*server"
+  if [[ "$?" -ne 0 ]]; then
+    return "${E_NO_SERVER}" 
+  fi 
+
+  cut -d\# -f1 ${SYSCON_NTPD} | grep "OPTIONS=" | grep "ntp:ntp"
+  if [[ "$?" -ne 0 ]]; then
+    return "${E_NTP_OPTIONS}" 
+  fi
+}
+
+
+function func_runner {
+  func_name=$1
+  shift
+  args=$@
+  ${func_name} ${args}
+  if [[ $? -eq 0 ]]; then
+    echo ${func_name} ${args} OK
+  else
+    echo ${func_name} ${args} ERROR
+  fi
+}
+
+
+function main {
+
+  return_code=0
+
+  # CIS 1.1.1 Test that there is a separate /tmp partition
+  func_runner separate_partition /tmp
+  
+  # CIS 1.1.2 Test that the nodev option is on the /tmp partition
+  func_runner mount_option /tmp nodev
+
+  # CIS 1.1.3 Test that the nosuid option is on the /tmp partition
+  func_runner mount_option /tmp nosuid
+
+  # CIS 1.1.4 Test that the noexec option is on the /tmp partition
+  func_runner mount_option /tmp noexec
+
+  # CIS 1.1.5 Test that there is a separate /var partition
+  func_runner separate_partition /var
+
+  # CIS 1.1.6 Test that the /var/tmp directory is bind mounted onto the /tmp filesystem
+  func_runner bind_mounted_to /var/tmp /tmp
+
+  # CIS 1.1.7 Test that there is a separate /var/log partition
+  func_runner separate_partition /var/log
+
+  # CIS 1.1.8 Test that there is a separate /var/log/audit partition
+  func_runner separate_partition /var/log/audit
+
+  # CIS 1.1.9 Test that there is a separate /home partition
+  func_runner separate_partition /home
+
+  # CIS 1.1.10 Test that the nodev option is on the /home partition
+  func_runner mount_option /home nodev
+
+  # TO DO CIS 1.1.11 nodev option on removable media partitions
+  # TO DO CIS 1.1.12 noexec option on removable media partitions
+  # TO DO CIS 1.1.13 nosuid option on removable media partitions
+
+  # CIS 1.1.14 Test that the nodev option is on the /dev/shm partition
+  func_runner mount_option /dev/shm nodev
+
+  # CIS 1.1.15 Test that the nosuid option is on the /dev/shm partition
+  func_runner mount_option /dev/shm nosuid
+
+  # CIS 1.1.16 Test that the noexec option is on the /dev/shm partition
+  func_runner mount_option /dev/shm noexec
+
+  # TO DO CIS 1.1.17 
+
+  # CIS 1.1.18 Test that the mounting of cramfs filesystems is disabled  
+  func_runner test_disable_mounting cramfs
+
+  # CIS 1.1.19 Test that the mounting of freevxfs filesystems is disabled  
+  func_runner test_disable_mounting freevxfs
+
+  # CIS 1.1.20 Test that the mounting of jffs2 filesystems is disabled  
+  func_runner test_disable_mounting jffs2
+
+  # CIS 1.1.21 Test that the mounting of hfs filesystems is disabled  
+  func_runner test_disable_mounting hfs
+
+  # CIS 1.1.22 Test that the mounting of hfsplus filesystems is disabled  
+  func_runner test_disable_mounting hfsplus
+
+  # CIS 1.1.23 Test that the mounting of squashfs filesystems is disabled  
+  func_runner test_disable_mounting squashfs
+
+  # CIS 1.1.24 Test that the mounting of udf filesystems is disabled  
+  func_runner test_disable_mounting udf
+
+  # CIS 1.2.1 Check that the CentOS GPG Key is Installed
+  func_runner centos_gpg_key_installed
+
+  # CIS 1.2.2 Check that gpgcheck is globally activated
+  func_runner yum_gpgcheck
+
+  # CIS 1.2.3 Check software package updates with yum
+  func_runner yum_update
+  
+  # CIS 1.2.4 Verify package integrity using RPM
+  #func_runner pkg_integrity
+  
+  # CIS 1.3.1 Check that the AIDE rpm is installed
+  func_runner rpm_installed aide
+
+  # CIS 1.3.2 Check periodic execution of file integrity (that aide runs from cron)
+  func_runner verify_aide_cron
+
+  # CIS 1.4.1 Check that SELinux is not disabled in /boot/grub2/grub.cfg 
+  func_runner verify_selinux_grubcfg
+
+  # CIS 1.4.2 Verify SELinux configured state in /etc/selinux/config
+  func_runner verify_selinux_state
+
+  # CIS 1.4.3 Verify SELinux policy in /etc/selinux/config
+  func_runner verify_selinux_policy
+
+  # CIS 1.4.4 Check setroubleshoot RPM is not installed
+  func_runner rpm_not_installed setroubleshoot 
+
+  # CIS 1.4.5 Check setroubleshoot RPM is not installed
+  func_runner rpm_not_installed mcstrans 
+
+  # CIS 1.4.6 Check for unconfined daemons
+  func_runner unconfined_procs
+
+  # CIS 1.5.1 Check ownership on /boot/grub2/grub.cfg
+  func_runner check_grub_owns 
+
+  # CIS 1.5.2 Check permissions on /boot/grub2/grub.cfg
+  func_runner check_grub_perms
+
+  # CIS 1.5.3 Check permissions on /boot/grub2/grub.cfg
+  func_runner check_boot_pass
+
+  # TO DO CIS 1.6.1 
+  # TO DO CIS 1.6.2
+  # TO DO CIS 1.7
+
+  # CIS 2.1.1 Check telnet-server RPM is not installed
+  func_runner rpm_not_installed telnet-server
+
+  # CIS 2.1.2 Check telnet RPM is not installed
+  func_runner rpm_not_installed telnet
+
+  # CIS 2.1.3 Check rsh-server RPM is not installed
+  func_runner rpm_not_installed rsh-server
+
+  # CIS 2.1.4 Check rsh RPM is not installed
+  func_runner rpm_not_installed rsh
+
+  # CIS 2.1.5 Check ypbind RPM is not installed
+  func_runner rpm_not_installed ypbind
+
+  # CIS 2.1.6 Check ypserv RPM is not installed
+  func_runner rpm_not_installed ypserv
+
+  # CIS 2.1.7 Check tftp RPM is not installed
+  func_runner rpm_not_installed tftp
+
+  # CIS 2.1.8 Check tftp-server RPM is not installed
+  func_runner rpm_not_installed tftp-server
+
+  # CIS 2.1.9 Check talk RPM is not installed
+  func_runner rpm_not_installed talk
+
+  # CIS 2.1.10 Check talk-server RPM is not installed
+  func_runner rpm_not_installed talk-server
+
+  # CIS 2.1.11 Check xinetd RPM is not installed
+  func_runner rpm_not_installed xinetd
+
+  # CIS 2.1.12 Check chargen-dgram is not enabled
+  func_runner check_svc_not_enabled chargen-dgram
+
+  # CIS 2.1.13 Check chargen-stream is not enabled
+  func_runner check_svc_not_enabled chargen-stream
+
+  # CIS 2.1.14 Check daytime-dgram is not enabled
+  func_runner check_svc_not_enabled daytime-dgram
+
+  # CIS 2.1.15 Check daytime-stream is not enabled
+  func_runner check_svc_not_enabled daytime-stream
+
+  # CIS 2.1.16 Check echo-dgram is not enabled
+  func_runner check_svc_not_enabled echo-dgram
+
+  # CIS 2.1.17 Check echo-dgram is not enabled
+  func_runner check_svc_not_enabled echo-stream
+
+  # CIS 2.1.18 Check tcpmux-server is not enabled
+  func_runner check_svc_not_enabled tcpmux-server
+
+  # TODO CIS 3.1 
+  # TODO CIS 3.2 
+  # CIS 3.2 Check telnet-server RPM is not installed
+  #func_runner rpm_not_installed xorg-x11-server-common
+
+  # CIS 3.3 Check avahi-daemon is not enabled
+  func_runner check_svc_not_enabled avahi-daemon
+
+  # CIS 3.4 Check cups is not enabled
+  func_runner check_svc_not_enabled cups
+
+  # CIS 3.5 Check dhcp RPM is not installed
+  func_runner rpm_not_installed dhcp
+
+  # CIS 3.6 NTP config
+  func_runner ntp_cfg
+
+  # CIS 3.7.1 Check LDAP RPMs are not installed
+  func_runner rpm_not_installed openldap-servers
+  func_runner rpm_not_installed openldap-clients
+
+  # CIS 3.8 Check NFS and RPC are not enabled
+  func_runner check_svc_not_enabled nfslock
+  func_runner check_svc_not_enabled rpcgssd
+  func_runner check_svc_not_enabled rpcbind
+  func_runner check_svc_not_enabled rpcidmapd
+  func_runner check_svc_not_enabled rpcsvcgssd
+
+  # CIS 3.9 Check bind RPM is not installed
+  func_runner rpm_not_installed bind
+
+  # CIS 3.10 Check vsftpd RPM is not installed
+  func_runner rpm_not_installed vsftpd
+
+  # CIS 3.11 Check httpd RPM is not installed
+  func_runner rpm_not_installed httpd
+
+  # CIS 3.12 Check dovecot RPM is not installed
+  func_runner rpm_not_installed dovecot
+
+  # CIS 3.13 Check samba RPM is not installed
+  func_runner rpm_not_installed samba
+
+  # CIS 3.14 Check squid RPM is not installed
+  func_runner rpm_not_installed squid
+
+  # CIS 3.15 Check net-snmp RPM is not installed
+  func_runner rpm_not_installed net-snmp
+ 
+}
+
+main
