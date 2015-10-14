@@ -2,31 +2,6 @@
 
 #https://benchmarks.cisecurity.org/tools2/linux/CIS_CentOS_Linux_7_Benchmark_v1.1.0.pdf
 
-E_NO_FS_TAB_OUTPUT=1
-E_NO_MOUNT_OUTPUT=2
-E_MOD_NOT_DISABLED=3
-E_MOD_LOADED=4
-E_NO_GPG_KEY=5
-E_NO_GPGCHECK=6
-E_YUM_NOT_UP2DATE=7
-E_PKG_INTEGRITY=8
-E_RPM_NOT_INSTALLED=9
-E_NO_AIDE_CRONJOB=10
-E_SELINUX_DISABLED=11
-E_SELINUX_NOTENFORCING=12
-E_SELINUX_NOTENABLED=13
-E_SELINUX_NOTTARGETED=14
-E_RPM_TXTOUT=15
-E_UNCONFINED_PROC=16
-E_GRUB_OWNERSHIP=17
-E_GRUB_PERMS=18
-E_NO_BOOT_SUPERUSER=19
-E_NO_BOOT_PASSWORD=20
-E_SVC_ENABLED=21
-E_RESTRICT_DEF=1
-E_RESTRICT_DEF_IP6=2
-E_NO_SERVER=3
-E_NTP_OPTIONS=4
 
 FSTAB='/etc/fstab'
 YUM_CONF='/etc/yum.conf'
@@ -40,11 +15,7 @@ function separate_partition {
   # Test that the supplied $1 is a separate partition
 
   local filesystem="${1}"
-  local grep_fstab
-  grep_fstab=$(grep "[[:space:]]${filesystem}[[:space:]]" ${FSTAB})
-  if [[ -z "${grep_fstab}" ]] ; then
-    return "${E_NO_FS_TAB_OUTPUT}"
-  fi
+  grep -q "[[:space:]]${filesystem}[[:space:]]" "${FSTAB}" || return
 }
 
 function mount_option {
@@ -53,17 +24,9 @@ function mount_option {
   local filesystem="${1}"
   local mnt_option="${2}"
 
-  local grep_fstab
-  grep_fstab=$(grep "[[:space:]]${filesystem}[[:space:]]" ${FSTAB} | grep "${mnt_option}")
-  if [[ -z "${grep_fstab}" ]] ; then
-    return "${E_NO_FS_TAB_OUTPUT}"
-  fi
+  grep "[[:space:]]${filesystem}[[:space:]]" "${FSTAB}" | grep -q "${mnt_option}" || return
 
-  local grep_mount
-  grep_mount=$(mount | grep "[[:space:]]${filesystem}[[:space:]]" | grep "${mnt_option}")
-  if [[ -z "${grep_mount}" ]] ; then
-    return "${E_NO_MOUNT_OUTPUT}"
-  fi  
+  mount | grep "[[:space:]]${filesystem}[[:space:]]" | grep -q "${mnt_option}" || return
 }
 
 function bind_mounted_to {
@@ -71,12 +34,9 @@ function bind_mounted_to {
 
   local directory="${1}"
   local filesystem="${2}"
+  local E_NO_MOUNT_OUTPUT=1
 
-  local grep_fstab
-  grep_fstab=$(grep "^${filesystem}[[:space:]]" ${FSTAB} | grep "${directory}")
-  if [[ -z "${grep_fstab}" ]] ; then
-    return "${E_NO_FS_TAB_OUTPUT}"
-  fi
+  grep "^${filesystem}[[:space:]]" "${FSTAB}" | grep -q "${directory}" || return
 
   local grep_mount
   grep_mount=$(mount | grep "^${filesystem}[[:space:]]" | grep "${directory}")
@@ -89,60 +49,38 @@ function bind_mounted_to {
   if [[ -z "${grep_mount}" ]] && [[ "${fs_dev}" != "${dir_dev}" ]] ; then
     return "${E_NO_MOUNT_OUTPUT}"
   fi
-
 }
 
 function test_disable_mounting {
   # Test the the supplied filesystem type $1 is disabled
 
   local module="${1}"
-  modprobe -n -v ${module} 2> /dev/null | grep "install \+/bin/true" > /dev/null
-  return_codes=(${PIPESTATUS[*]})
-  if [[ "${return_codes[1]}" -ne 0 ]]; then
-    return "${E_MOD_NOT_DISABLED}"
-  fi
+  modprobe -n -v ${module} | grep -q "install \+/bin/true" || return 
 
-  local lsmod_query
-  lsmod_query=$(lsmod | grep "${module}")
-  if [[ ! -z "${lsmod_query}" ]]; then
-    return "${E_MOD_LOADED}"
-  fi
+  lsmod | grep -qv "${module}" || return
 }
 
 function centos_gpg_key_installed {
   # Test CentOS GPG Key is installed
   local centos_off_str='gpg(CentOS-7 Key (CentOS 7 Official Signing Key) <security@centos.org>)'
-  rpm -q --queryformat "%{SUMMARY}\n" gpg-pubkey | grep "${centos_off_str}" > /dev/null
-  if [[ "$?" -ne 0 ]]; then
-    return "${E_NO_GPG_KEY}"
-  fi
+  rpm -q --queryformat "%{SUMMARY}\n" gpg-pubkey | grep -q "${centos_off_str}" || return
 }
 
 function yum_gpgcheck {
   # Check that gpgcheck is Globally Activated
-  local grep_out
-  grep_out="$(cut -d \# -f1 ${YUM_CONF} | grep 'gpgcheck')" 
-  local exp_string='gpgcheck=1'
-  if [[ "${grep_out}" != "${exp_string}" ]]; then
-    return "${E_NO_GPGCHECK}"
-  fi
+  cut -d \# -f1 ${YUM_CONF} | grep 'gpgcheck' | grep -q 'gpgcheck=1' || return
 }
 
 function yum_update {
   # Check for outstanding pkg update with yum
-  yum check-update > /dev/null 
-  if [[ "$?" -ne 0 ]] ; then
-    return "${E_YUM_NOT_UP2DATE}"
-  fi
+  yum -q check-update || return
 }
 
 function pkg_integrity {
   # Verify the installed packages by comparing the installed files against file info stored in the pkg
   local rpm_out
   rpm_out="$(rpm -qVa | awk '$2 != "c" { print $0}')"
-  if [[ -n "${rpm_out}" ]]; then
-    return "${E_PKG_INTEGRITY}"  
-  fi
+  [[ -z "${rpm_out}" ]] || return
 }
 
 function rpm_installed {
@@ -150,19 +88,12 @@ function rpm_installed {
 
   local rpm="${1}"
   local rpm_out
-  rpm_out="$(rpm -q $rpm | cut -d- -f1)"
-  if [[ "${rpm_out}" != "${rpm}" ]]; then
-    return "${E_RPM_NOT_INSTALLED}"
-  fi
+  rpm -q $rpm | cut -d- -f1 | grep -q "${rpm}" || return
 }
 
 function verify_aide_cron {
   # Verify there is a cron job scheduled to run the aide check
-
-  crontab -u root -l | cut -d\# -f1 | grep "aide \+--check"
-  if [[ "$?" -ne 0 ]]; then
-    return "${E_NO_AIDE_CRONJOB}"
-  fi
+  crontab -u root -l | cut -d\# -f1 | grep -q "aide \+--check" || return
 }
 
 function verify_selinux_grubcfg {
@@ -170,46 +101,30 @@ function verify_selinux_grubcfg {
 
   local grep_out1
   grep_out1="$(grep selinux=0 ${GRUB_CFG})"
-  if [[ -n "${grep_out1}" ]]; then
-    return "${E_SELINUX_DISABLED}"
-  fi
+  [[ -z "${grep_out1}" ]] || return
 
   local grep_out2
   grep_out2="$(grep enforcing=0 ${GRUB_CFG})"
-  if [[ -n "${grep_out2}" ]]; then
-    return "${E_SELINUX_NOTENFORCING}"
-  fi
+  [[ -z "${grep_out2}" ]] || return
 }
 
 function verify_selinux_state {
   # Verify SELinux configured state in /etc/selinux/config
 
-  local grep_out
-  grep_out="$(cut -d \# -f1 ${SELINUX_CFG} | grep 'SELINUXTYPE=' | tr -d '[[:space:]]')"
-  if [[ "${grep_out}" != "SELINUXTYPE=targeted" ]]; then
-    return "${E_SELINUX_NOTENABLED}"
-  fi
+  cut -d \# -f1 ${SELINUX_CFG} | grep 'SELINUX=' | tr -d '[[:space:]]' | grep -q 'SELINUX=enforcing' || return
 }
 
 function verify_selinux_policy {
   # Verify SELinux policy in /etc/selinux/config
 
-  local grep_out
-  grep_out="$(cut -d \# -f1 ${SELINUX_CFG} | grep 'SELINUXTYPE=' | tr -d '[[:space:]]')"
-  if [[ "${grep_out}" != "SELINUXTYPE=targeted" ]]; then
-    return "${E_SELINUX_NOTTARGETED}"
-  fi
+  cut -d \# -f1 ${SELINUX_CFG} | grep 'SELINUXTYPE=' | tr -d '[[:space:]]' | grep -q 'SELINUXTYPE=targeted' || return
 }
 
 function rpm_not_installed {
+  # Check that the supplied rpm $1 is not installed
 
   local rpm="${1}"
-  local rpm_out
-  rpm_out="$(rpm -q $rpm)"
-  local exp_string="package ${rpm} is not installed"
-  if [[ "${rpm_out}" != "${exp_string}" ]]; then
-    return "${E_RPM_TXTOUT}"
-  fi
+  rpm -q $rpm | grep -q "package ${rpm} is not installed" || return
 }
 
 function unconfined_procs {
@@ -217,76 +132,47 @@ function unconfined_procs {
   
   local ps_out
   ps_out="$(ps -eZ | egrep 'initrc|unconfined' | egrep -v 'bash|ps|grep')"
-  if [[ -n "${ps_out}" ]]; then
-    return "${E_UNCONFINED_PROC}"
-  fi
+  [[ -n "${ps_out}" ]] || return
 }
 
 function check_grub_owns {
   # Check User/Group Owner on grub.cfg file
-  local stat_out
-  stat_out="$(stat -L -c "%u %g" ${GRUB_CFG} | grep '0 0')"
-  if [[ -z "${stat_out}" ]]; then
-    return "${E_GRUB_OWNERSHIP}"
-  fi
+  stat -L -c "%u %g" ${GRUB_CFG} | grep -q '0 0' || return
 }
 
 function check_grub_perms {
   # Check Perms on grub.cfg file
-  local stat_out
-  stat_out="$(stat -L -c "%a" ${GRUB_CFG} | grep '.00')"
-  if [[ -z "${stat_out}" ]]; then
-    return "${E_GRUB_PERMS}"
-  fi
+  stat -L -c "%a" ${GRUB_CFG} | grep -q '.00' || return
 }
 
 function check_boot_pass {
-
-  grep 'set superusers=' ${GRUB_CFG}
+  grep -q 'set superusers=' "${GRUB_CFG}"
   if [[ "$?" -ne 0 ]]; then
-    grep 'set superusers=' ${GRUB_DIR}/* 
-    if [[ "$?" -ne 0 ]]; then
-      return "${E_NO_BOOT_SUPERUSER}"
-    else  
-      file="$(grep 'set superusers' ${GRUB_DIR}/* | cut -d: -f1)"
-      grep 'password' ${file}
-      if [[ "$?" -ne 0 ]]; then
-        return "${E_NO_BOOT_PASSWORD}" 
-      fi 
-    fi
+    grep -q 'set superusers=' ${GRUB_DIR}/* || return
+    file="$(grep 'set superusers' ${GRUB_DIR}/* | cut -d: -f1)"
+    grep -q 'password' "${file}" || return
+  else
+    grep -q 'password' "${GRUB_CFG}" || return
   fi
 }
 
 function check_svc_not_enabled {
   # Verify that the service $1 is not enabled
-  systemctl --quiet is-enabled "${service}" 
-  if [[ "$?" -eq 0 ]]; then
-    return "${E_SVC_ENABLED}"
-  fi
+  local service="$1" 
+  systemctl list-unit-files | grep -qv "${service}" && return 
+  systemctl is-enabled "${service}" | grep -q 'enabled' || return
 }
 
 function ntp_cfg {
   cut -d\# -f1 ${NTP_CONF} | egrep "restrict{1}[[:space:]]+default{1}" ${NTP_CONF} | grep kod \
-| grep nomodify | grep notrap | grep nopeer | grep noquery 
-  if [[ "$?" -ne 0 ]]; then
-    return "${E_RESTRICT_DEF}" 
-  fi 
+| grep nomodify | grep notrap | grep nopeer | grep -q noquery || return
 
   cut -d\# -f1 ${NTP_CONF} | egrep "restrict{1}[[:space:]]+\-6{1}[[:space:]]+default" | grep kod \
-| grep nomodify | grep notrap | grep nopeer | grep noquery
-  if [[ "$?" -ne 0 ]]; then
-    return "${E_RESTRICT_DEF_IP6}" 
-  fi 
+| grep nomodify | grep notrap | grep nopeer | grep -q noquery || return
 
-  cut -d\# -f1 ${NTP_CONF} | egrep "^[[:space:]]*server"
-  if [[ "$?" -ne 0 ]]; then
-    return "${E_NO_SERVER}" 
-  fi 
+  cut -d\# -f1 ${NTP_CONF} | egrep -q "^[[:space:]]*server" || return
 
-  cut -d\# -f1 ${SYSCON_NTPD} | grep "OPTIONS=" | grep "ntp:ntp"
-  if [[ "$?" -ne 0 ]]; then
-    return "${E_NTP_OPTIONS}" 
-  fi
+  cut -d\# -f1 ${SYSCON_NTPD} | grep "OPTIONS=" | grep -q "ntp:ntp" || return
 }
 
 
@@ -383,11 +269,11 @@ function main {
   func_runner yum_update
   
   # CIS 1.2.4 Verify package integrity using RPM
-  #func_runner pkg_integrity
+  func_runner pkg_integrity
   
   # CIS 1.3.1 Check that the AIDE rpm is installed
   func_runner rpm_installed aide
-
+  
   # CIS 1.3.2 Check periodic execution of file integrity (that aide runs from cron)
   func_runner verify_aide_cron
 
@@ -408,7 +294,7 @@ function main {
 
   # CIS 1.4.6 Check for unconfined daemons
   func_runner unconfined_procs
-
+  
   # CIS 1.5.1 Check ownership on /boot/grub2/grub.cfg
   func_runner check_grub_owns 
 
@@ -463,7 +349,7 @@ function main {
 
   # CIS 2.1.14 Check daytime-dgram is not enabled
   func_runner check_svc_not_enabled daytime-dgram
-
+  
   # CIS 2.1.15 Check daytime-stream is not enabled
   func_runner check_svc_not_enabled daytime-stream
 
@@ -479,7 +365,7 @@ function main {
   # TODO CIS 3.1 
   # TODO CIS 3.2 
   # CIS 3.2 Check telnet-server RPM is not installed
-  #func_runner rpm_not_installed xorg-x11-server-common
+  func_runner rpm_not_installed xorg-x11-server-common
 
   # CIS 3.3 Check avahi-daemon is not enabled
   func_runner check_svc_not_enabled avahi-daemon
