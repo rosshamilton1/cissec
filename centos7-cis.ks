@@ -74,17 +74,17 @@ EOF
 
 # Disable mounting of unneeded filesystems CIS 1.1.18 - 1.1.24
 cat << EOF >> /etc/modprobe.d/CIS.conf
-install cramfs /bin/true	# CIS 1.1.18
-install freevxfs /bin/true	# CIS 1.1.19
-install jffs2 /bin/true		# CIS 1.1.20
-install hfs /bin/true		# CIS 1.1.21
-install hfsplus /bin/true	# CIS 1.1.22
-install squashfs /bin/true	# CIS 1.1.23
-install udf /bin/true		# CIS 1.1.24
-install dccp /bin/true		# CIS 4.6.1
-install sctp /bin/true		# CIS 4.6.2
-install rds /bin/true		# CIS 4.6.3
-install tipc /bin/true		# CIS 4.6.18
+install cramfs /bin/true
+install freevxfs /bin/true
+install jffs2 /bin/true
+install hfs /bin/true
+install hfsplus /bin/true
+install squashfs /bin/true
+install udf /bin/true
+install dccp /bin/true
+install sctp /bin/true
+install rds /bin/true
+install tipc /bin/true
 EOF
 
 rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7	# CIS 1.2.1
@@ -353,9 +353,7 @@ usermod -G wheel root
 
 # Install AIDE     						# CIS 1.3.1
 echo "0 5 * * * /usr/sbin/aide --check" >> /var/spool/cron/root
-#echo PRELINKING=no > /etc/sysconfig/prelink
 #Initialise last so it doesn't pick up changes made by the post-install of the KS
 /usr/sbin/aide --init -B 'database_out=file:/var/lib/aide/aide.db.gz'
-#/usr/sbin/prelink -ua
 
 %end
