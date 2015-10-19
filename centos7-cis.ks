@@ -89,9 +89,10 @@ EOF
 
 rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7	# CIS 1.2.1
 
-/usr/bin/systemctl enable firewalld			# CIS 4.7
-/usr/bin/systemctl enable rsyslog			# CIS 5.1.2
-/usr/bin/systemctl enable crond				# CIS 6.1.2
+systemctl enable firewalld			# CIS 4.7
+systemctl enable rsyslog			# CIS 5.1.2
+systemctl enable auditd				# CIS 5.2.2
+systemctl enable crond				# CIS 6.1.2
 
 # Set bootloader password				# CIS 1.5.3
 cat << EOF2 >> /etc/grub.d/01_users
@@ -103,6 +104,7 @@ password_pbkdf2 bootuser grub.pbkdf2.sha512.10000.FE4D934335A0A9CB1B8E748713D1BD
 EOF
 EOF2
 
+sed -i s/'^GRUB_CMDLINE_LINUX="'/'GRUB_CMDLINE_LINUX="audit=1 '/ /etc/default/grub  # CIS 5.2.3
 grub_cfg='/boot/grub2/grub.cfg'
 grub2-mkconfig -o ${grub_cfg}
 
@@ -121,8 +123,8 @@ net.ipv4.conf.all.accept_redirects = 0 			# CIS 4.2.2
 net.ipv4.conf.default.accept_redirects = 0 		# CIS 4.2.2
 net.ipv4.conf.all.secure_redirects = 0 			# CIS 4.2.3
 net.ipv4.conf.default.secure_redirects = 0 		# CIS 4.2.3
-net.ipv4.conf.all.log_martians = 0 			# CIS 4.2.4
-net.ipv4.conf.default.log_martians = 0 			# CIS 4.2.4
+net.ipv4.conf.all.log_martians = 1 			# CIS 4.2.4
+net.ipv4.conf.default.log_martians = 1 			# CIS 4.2.4
 net.ipv4.icmp_echo_ignore_broadcasts = 1		# CIS 4.2.5
 net.ipv4.icmp_ignore_bogus_error_responses = 1		# CIS 4.2.6
 net.ipv4.conf.all.rp_filter = 1				# CIS 4.2.7
@@ -145,7 +147,7 @@ ntp_conf='/etc/ntp.conf'
 sed -i "s/^restrict default/restrict default kod/" ${ntp_conf}
 line_num="$(grep -n "^restrict default" ${ntp_conf} | cut -f1 -d:)"
 sed -i "${line_num} a restrict -6 default kod nomodify notrap nopeer noquery" ${ntp_conf}
-sed -i s/'^OPTIONS="-g"'/'OPTIONS="-g -u ntp:ntp -p /var/run/ntpd.pid"'/ /etc/sysconfig/ntpd
+sed -i s/'^OPTIONS="-g"'/'OPTIONS="-g -u ntp:ntp -p \/var\/run\/ntpd.pid"'/ /etc/sysconfig/ntpd
 
 echo "ALL: ALL" >> /etc/hosts.deny			# CIS 4.5.4
 chown root:root /etc/hosts.deny				# CIS 4.5.5
@@ -155,7 +157,15 @@ chown root:root /etc/rsyslog.conf			# CIS 5.1.4
 chmod 600 /etc/rsyslog.conf				# CIS 5.1.4
 # CIS 5.1.3  Configure /etc/rsyslog.conf - This is environment specific 
 # CIS 5.1.5  Configure rsyslog to Send Log to a Remote Log Host - This is environment specific
+auditd_conf='/etc/audit/auditd.conf'
+# CIS 5.2.1.1 Configure Audit Log Storage Size
+sed -i 's/^max_log_file.*$/max_log_file 1024/' ${auditd_conf}		
 # CIS 5.2.1.2 Disable system on Audit Log Full - This is VERY environment specific (and likely controversial)
+sed -i 's/^space_left_action.*$/space_left_action email/' ${auditd_conf}		
+sed -i 's/^action_mail_acct.*$/action_mail_acct root/' ${auditd_conf}		
+sed -i 's/^admin_space_left_action.*$/admin_space_left_action halt/' ${auditd_conf}		
+# CIS 5.2.1.3 Keep All Auditing Information
+sed -i 's/^max_log_file_action.*$/max_log_file_action keep_logs/' ${auditd_conf}		
 
 # CIS 6.1.2-6.1.9
 chown root:root /etc/anacrontab	/etc/crontab /etc/cron.hourly /etc/cron.daily /etc/cron.weekly /etc/cron.monthly /etc/cron.d
@@ -170,9 +180,8 @@ chmod 600 /etc/at.allow /etc/cron.allow
 
 
 
-sed -i s/'^GRUB_CMDLINE_LINUX="'/'GRUB_CMDLINE_LINUX="audit=1 '/ /etc/default/grub  # CIS 5.2.3
 
-cat << EOF >> /etc/audit/audit.rules
+cat << EOF >> /etc/audit/rules.d/audit.rules
 
 -a always,exit -F arch=b64 -S adjtimex -S settimeofday -k time-change 
 -a always,exit -F arch=b32 -S adjtimex -S settimeofday -S stime -k time-change
@@ -201,7 +210,7 @@ cat << EOF >> /etc/audit/audit.rules
 
 -w /var/run/utmp -p wa -k session
 -w /var/log/wtmp -p wa -k session
--w /var/run/btmp -p wa -k session
+-w /var/log/btmp -p wa -k session
 
 -a always,exit -F arch=b64 -S chmod -S fchmod -S fchmodat -F auid>=500 -F auid!=4294967295 -k perm_mod
 -a always,exit -F arch=b32 -S chmod -S fchmod -S fchmodat -F auid>=500 -F auid!=4294967295 -k perm_mod
@@ -283,7 +292,10 @@ sed -i 's/^PASS_MAX_DAYS.*$/PASS_MAX_DAYS 90/' ${login_defs}		# CIS 7.1.1
 sed -i 's/^PASS_MIN_DAYS.*$/PASS_MIN_DAYS 7/' ${login_defs}		# CIS 7.1.2
 sed -i 's/^PASS_WARN_AGE.*$/PASS_WARN_AGE 7/' ${login_defs}		# CIS 7.1.3
 
-usermod -g 0 root							# CIS 7.3
+root_gid="$(id -g root)"
+if [[ "${root_gid}" -ne 0 ]] ; then 
+  usermod -g 0 root							# CIS 7.3
+fi
 
 bashrc='/etc/bashrc'
 #first umask cmd sets it for users, second umask cmd sets it for system reserved uids

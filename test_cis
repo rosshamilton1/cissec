@@ -10,6 +10,16 @@ GRUB_DIR='/etc/grub.d'
 SELINUX_CFG='/etc/selinux/config'
 NTP_CONF='/etc/ntp.conf'
 SYSCON_NTPD='/etc/sysconfig/ntpd'
+LIMITS_CNF='/etc/security/limits.conf'
+SYSCTL_CNF='/etc/sysctl.conf'
+CENTOS_REL='/etc/centos-release'
+LATEST_REL_STR='CentOS Linux release 7.1.1503 (Core)'
+HOSTS_ALLOW='/etc/hosts.allow'
+HOSTS_DENY='/etc/hosts.deny'
+CIS_CNF='/etc/modprobe.d/CIS.conf'
+RSYSLOG_CNF='/etc/rsyslog.conf'
+AUDITD_CNF='/etc/audit/auditd.conf'
+AUDIT_RULES='/etc/audit/audit.rules'
 
 function separate_partition {
   # Test that the supplied $1 is a separate partition
@@ -110,26 +120,22 @@ function verify_selinux_grubcfg {
 
 function verify_selinux_state {
   # Verify SELinux configured state in /etc/selinux/config
-
   cut -d \# -f1 ${SELINUX_CFG} | grep 'SELINUX=' | tr -d '[[:space:]]' | grep -q 'SELINUX=enforcing' || return
 }
 
 function verify_selinux_policy {
   # Verify SELinux policy in /etc/selinux/config
-
   cut -d \# -f1 ${SELINUX_CFG} | grep 'SELINUXTYPE=' | tr -d '[[:space:]]' | grep -q 'SELINUXTYPE=targeted' || return
 }
 
 function rpm_not_installed {
   # Check that the supplied rpm $1 is not installed
-
   local rpm="${1}"
   rpm -q $rpm | grep -q "package ${rpm} is not installed" || return
 }
 
 function unconfined_procs {
   # Test for unconfined daemons
-  
   local ps_out
   ps_out="$(ps -eZ | egrep 'initrc|unconfined' | egrep -v 'bash|ps|grep')"
   [[ -n "${ps_out}" ]] || return
@@ -143,6 +149,20 @@ function check_grub_owns {
 function check_grub_perms {
   # Check Perms on grub.cfg file
   stat -L -c "%a" ${GRUB_CFG} | grep -q '.00' || return
+}
+
+function check_file_perms {
+  # Check Perms on a supplied file match supplied pattern
+  local file="${1}"
+  local pattern="${2}"
+
+  stat -L -c "%a" ${file} | grep -q "${pattern}" || return
+}
+
+function check_root_owns {
+  # Check User/Group Owner on the specified file
+  local file="${1}"
+  stat -L -c "%u %g" ${file} | grep -q '0 0' || return
 }
 
 function check_boot_pass {
@@ -163,6 +183,13 @@ function check_svc_not_enabled {
   systemctl is-enabled "${service}" | grep -q 'enabled' || return
 }
 
+function check_svc_enabled {
+  # Verify that the service $1 is enabled
+  local service="$1" 
+  systemctl list-unit-files | grep -q "${service}.service" || return 
+  systemctl is-enabled "${service}" | grep -q 'enabled' && return
+}
+
 function ntp_cfg {
   cut -d\# -f1 ${NTP_CONF} | egrep "restrict{1}[[:space:]]+default{1}" ${NTP_CONF} | grep kod \
 | grep nomodify | grep notrap | grep nopeer | grep -q noquery || return
@@ -175,6 +202,188 @@ function ntp_cfg {
   cut -d\# -f1 ${SYSCON_NTPD} | grep "OPTIONS=" | grep -q "ntp:ntp" || return
 }
 
+function restrict_core_dumps {
+  # Verify that suid programs cannot dump their core
+  egrep -q "\*{1}[[:space:]]+hard[[:space:]]+core[[:space:]]+0" "${LIMITS_CNF}" || return
+  cut -d\# -f1 ${SYSCTL_CNF} | grep fs.suid_dumpable | cut -d= -f2 | tr -d '[[:space:]]' | grep -q '0' || return 
+}
+
+function chk_sysctl_cnf {
+  # Check the sysctl_conf file contains a particular flag, set to a particular value 
+  local flag="$1"
+  local value="$2"
+  local sysctl_cnf="$3"
+
+  cut -d\# -f1 ${sysctl_cnf} | grep "${flag}" | cut -d= -f2 | tr -d '[[:space:]]' | grep -q "${value}" || return
+}
+
+
+function chk_sysctl {
+  local flag="$1"
+  local value="$2"
+
+  sysctl "${flag}" | cut -d= -f2 | tr -d '[[:space:]]' | grep -q "${value}" || return
+}
+
+function chk_latest_rel {
+  grep -q "${LATEST_REL_STR}" "${CENTOS_REL}" || return
+}
+
+function sticky_wrld_w_dirs {
+  dirs="$(df --local -P | awk {'if (NR!=1) print $6'} | xargs -I '{}' find '{}' -xdev -type d \
+\( -perm -0002 -a ! -perm -1000 \))"
+  [[ -z "${dirs}" ]] || return
+}
+
+function check_umask {
+  cut -d\# -f1 /etc/sysconfig/init | grep -q "umask[[:space:]]027" || return
+}
+
+function check_def_tgt {
+  #Check that the default boot target is multi-user.target 
+  [[ "${default_tgt}" = "multi-user.target" ]] || return
+}
+
+function mta_local_only {
+  # If port 25 is being listened on, check it is on the loopback address
+  netstat_out="$(netstat -an | grep "LIST" | grep ":25[[:space:]]")"
+  if [[ "$?" -eq 0 ]] ; then
+    ip=$(echo ${netstat_out} | cut -d: -f1 | cut -d" " -f4)
+    [[ "${ip}" = "127.0.0.1" ]] || return    
+  fi
+}
+
+function ip6_router_advertisements_dis {
+  # Check that IPv6 Router Advertisements are disabled
+  # If ipv6 is disabled then we don't mind what IPv6 router advertisements are set to
+  # If ipv6 is enabled then both settings should be set to zero
+  chk_sysctl net.ipv6.conf.all.disable_ipv6 1 && return
+  chk_sysctl net.ipv6.conf.all.accept_ra 0 || return
+  chk_sysctl net.ipv6.conf.default.accept_ra 0 || return
+}
+  
+function ip6_redirect_accept_dis {
+  # Check that IPv6 Redirect Acceptance is disabled
+  # If ipv6 is disabled then we don't mind what IPv6 redirect acceptance is set to
+  # If ipv6 is enabled then both settings should be set to zero
+  chk_sysctl net.ipv6.conf.all.disable_ipv6 1 && return
+  chk_sysctl net.ipv6.conf.all.accept_redirects 0 || return
+  chk_sysctl net.ipv6.conf.default.accept_redirects 0 || return
+}
+
+function chk_file_exists {
+  local file="$1"
+  [[ -f "${file}" ]] || return
+}
+ 
+function chk_hosts_deny_content {
+  # Check the hosts.deny file resembles ALL: ALL
+  cut -d\# -f1 ${HOSTS_DENY} | grep -q "ALL[[:space:]]*:[[:space:]]*ALL" || return
+}
+
+function chk_cis_cnf { 
+  local protocol="$1"
+  local file="$2"
+  grep -q "install[[:space:]]${protocol}[[:space:]]/bin/true" ${file} || return
+} 
+
+function chk_rsyslog_content {
+  grep -q "^*.*[^I][^I]*@" ${RSYSLOG_CNF} || return
+}
+
+function audit_log_storage_size {
+  # Check the max size of the audit log file is configured
+  cut -d\# -f1 ${AUDITD_CNF} | egrep -q "max_log_file[[:space:]]|max_log_file=" || return
+}
+
+
+function dis_on_audit_log_full {
+  # Check auditd.conf is configured to notify the admin and halt the system when audit logs are full
+  cut -d\# -f2 ${AUDITD_CNF} | grep 'space_left_action' | cut -d= -f2 | tr -d '[[:space:]]' | grep -q 'email' || return
+  cut -d\# -f2 ${AUDITD_CNF} | grep 'action_mail_acct' | cut -d= -f2 | tr -d '[[:space:]]' | grep -q 'root' || return
+  cut -d\# -f2 ${AUDITD_CNF} | grep 'admin_space_left_action' | cut -d= -f2 | tr -d '[[:space:]]' | grep -q 'halt' || return
+}
+
+function keep_all_audit_info {
+  # Check auditd.conf is configured to retain audit logs
+  cut -d\# -f2 ${AUDITD_CNF} | grep 'max_log_file_action' | cut -d= -f2 | tr -d '[[:space:]]' | grep -q 'keep_logs' || return
+}
+
+function audit_procs_prior_2_auditd {
+  # Check lines that start with linux has the audit=1 parameter set
+  grep_grub="$(grep "^[[:space:]]*linux" ${GRUB_CFG} | grep -v 'audit=1')"
+  [[ -z "${grep_grub}" ]] || return
+}
+
+function audit_date_time {
+  # Confirm that the time-change lines specified below do appear in the audit.rules file
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+time-change" | egrep "\-S[[:space:]]+settimeofday" \
+  | egrep "\-S[[:space:]]+adjtimex" | egrep "\-F[[:space:]]+arch=b64" | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+time-change" | egrep "\-S[[:space:]]+settimeofday" \
+  | egrep "\-S[[:space:]]+adjtimex" | egrep "\-F[[:space:]]+arch=b32" | egrep "\-S[[:space:]]+stime" | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+time-change" | egrep "\-F[[:space:]]+arch=b64" \
+  | egrep "\-S[[:space:]]+clock_settime" | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+time-change" | egrep "\-F[[:space:]]+arch=b32" \
+  | egrep "\-S[[:space:]]+clock_settime" | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+time-change" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/etc\/localtime" || return
+}
+
+function audit_user_group {
+  # Confirm that the identity lines specified below do appear in the audit.rules file
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+identity" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/etc\/group" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+identity" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/etc\/passwd" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+identity" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/etc\/gshadow" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+identity" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/etc\/shadow" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+identity" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/etc\/security\/opasswd" || return
+}
+
+function audit_network_env {
+  # Confirm that the system-locale lines specified below do appear in the audit.rules file
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+system-locale" | egrep "\-S[[:space:]]+sethostname" \
+  | egrep "\-S[[:space:]]+setdomainname" | egrep "\-F[[:space:]]+arch=b64" | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+system-locale" | egrep "\-S[[:space:]]+sethostname" \
+  | egrep "\-S[[:space:]]+setdomainname" | egrep "\-F[[:space:]]+arch=b32" | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+system-locale" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/etc\/issue" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+system-locale" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/etc\/issue.net" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+system-locale" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/etc\/hosts" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+system-locale" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/etc\/sysconfig\/network" || return
+}
+
+function audit_logins_logouts {
+  # Confirm that the logins lines specified below do appear in the audit.rules file
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+logins" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/var\/log\/faillog" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+logins" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/var\/log\/lastlog" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+logins" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/var\/log\/tallylog" || return
+}
+
+function audit_session_init {
+  # Confirm that the logins lines specified below do appear in the audit.rules file
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+session" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/var\/run\/utmp" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+session" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/var\/log\/wtmp" || return
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+session" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/var\/log\/btmp" || return
+}
+
+function audit_sys_mac {
+  # Confirm that the logins lines specified below do appear in the audit.rules file
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+MAC-policy" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/etc\/selinux\/" || return
+}
 
 function func_runner {
   func_name=$1
@@ -190,8 +399,6 @@ function func_runner {
 
 
 function main {
-
-  return_code=0
 
   # CIS 1.1.1 Test that there is a separate /tmp partition
   func_runner separate_partition /tmp
@@ -236,7 +443,8 @@ function main {
   # CIS 1.1.16 Test that the noexec option is on the /dev/shm partition
   func_runner mount_option /dev/shm noexec
 
-  # TO DO CIS 1.1.17 
+  # TO DO CIS 1.1.17 Check for the sticky bit on all world writable dirs
+  func_runner sticky_wrld_w_dirs 
 
   # CIS 1.1.18 Test that the mounting of cramfs filesystems is disabled  
   func_runner test_disable_mounting cramfs
@@ -296,7 +504,7 @@ function main {
   func_runner unconfined_procs
   
   # CIS 1.5.1 Check ownership on /boot/grub2/grub.cfg
-  func_runner check_grub_owns 
+  func_runner check_root_owns ${GRUB_CFG}
 
   # CIS 1.5.2 Check permissions on /boot/grub2/grub.cfg
   func_runner check_grub_perms
@@ -304,9 +512,14 @@ function main {
   # CIS 1.5.3 Check permissions on /boot/grub2/grub.cfg
   func_runner check_boot_pass
 
-  # TO DO CIS 1.6.1 
-  # TO DO CIS 1.6.2
+  # TO DO CIS 1.6.1
+  func_runner restrict_core_dumps 
+
+  # CIS 1.6.2 Verify that the flag to force randomized virtual memory region placement is set
+  func_runner chk_sysctl kernel.randomize_va_space 2
+
   # TO DO CIS 1.7
+  func_runner chk_latest_rel
 
   # CIS 2.1.1 Check telnet-server RPM is not installed
   func_runner rpm_not_installed telnet-server
@@ -362,8 +575,12 @@ function main {
   # CIS 2.1.18 Check tcpmux-server is not enabled
   func_runner check_svc_not_enabled tcpmux-server
 
-  # TODO CIS 3.1 
-  # TODO CIS 3.2 
+  # CIS 3.1 Check Daemon umask
+  func_runner check_umask 
+
+  # TODO CIS 3.2  X Window System
+  func_runner check_def_tgt
+
   # CIS 3.2 Check telnet-server RPM is not installed
   func_runner rpm_not_installed xorg-x11-server-common
 
@@ -410,7 +627,142 @@ function main {
 
   # CIS 3.15 Check net-snmp RPM is not installed
   func_runner rpm_not_installed net-snmp
- 
+
+  # CIS 3.16 MTA in local-only mode
+  # Disable for now as function requires netstat and netstat is not part of the build
+  #func_runner mta_local_only
+
+  # CIS 4.1.1 IP Forwarding should be disabled
+  func_runner chk_sysctl net.ipv4.ip_forward 0
+
+  # CIS 4.1.2 Send Packet Redirects should be disabled
+  func_runner chk_sysctl net.ipv4.conf.all.send_redirects 0
+  func_runner chk_sysctl net.ipv4.conf.default.send_redirects 0
+
+  # CIS 4.2.1 Source Routed Packet Acceptance should be disabled
+  func_runner chk_sysctl net.ipv4.conf.all.accept_source_route 0
+  func_runner chk_sysctl net.ipv4.conf.default.accept_source_route 0
+
+  # CIS 4.2.2 ICMP Redirect Acceptance should be disabled
+  func_runner chk_sysctl net.ipv4.conf.all.accept_redirects 0
+  func_runner chk_sysctl net.ipv4.conf.default.accept_redirects 0
+
+  # CIS 4.2.3 ICMP Redirect Acceptance should be disabled
+  func_runner chk_sysctl net.ipv4.conf.all.secure_redirects 0
+  func_runner chk_sysctl net.ipv4.conf.all.secure_redirects 0
+  func_runner chk_sysctl net.ipv4.conf.default.secure_redirects 0
+
+  # CIS 4.2.4 Log Suspicious Packets
+  func_runner chk_sysctl net.ipv4.conf.all.log_martians 1
+  func_runner chk_sysctl net.ipv4.conf.default.log_martians 1
+
+  # CIS 4.2.5 Ignore Broadcast Requests should be enabled
+  func_runner chk_sysctl net.ipv4.icmp_echo_ignore_broadcasts 1
+
+  # CIS 4.2.6 Bad Error Message Protection should be enabled
+  func_runner chk_sysctl net.ipv4.icmp_ignore_bogus_error_responses 1
+
+  # CIS 4.2.7 RFC-recommended Source Route Validation should be enabled
+  func_runner chk_sysctl net.ipv4.conf.all.rp_filter 1
+  func_runner chk_sysctl net.ipv4.conf.default.rp_filter 1
+
+  # CIS 4.2.8 TCP SYN Cookies should be enabled
+  func_runner chk_sysctl net.ipv4.tcp_syncookies 1
+
+  # TODO CIS 4.3.1 Check Wireless Interfaces are deactivated
+
+  # CIS 4.4.1.1 If IPv6 enabled IPv6 Router Advertisements should be disabled
+  func_runner ip6_router_advertisements_dis
+
+  # CIS 4.4.1.2 If IPv6 enabled IPv6 Redirect Acceptance should be disabled
+  func_runner ip6_redirect_accept_dis
+
+  # CIS 4.4.2 IPv6 disabled
+  func_runner chk_sysctl net.ipv6.conf.all.disable_ipv6 1
+
+  # CIS 4.5.1 Check that TCP Wrappers are installed
+  func_runner rpm_installed tcp_wrappers
+  
+  # CIS 4.5.2 Check that /etc/hosts.allow exists
+  func_runner chk_file_exists ${HOSTS_ALLOW}
+  
+  # CIS 4.5.3 Verify permissions on /etc/hosts.allow
+  func_runner check_root_owns ${HOSTS_ALLOW}
+  func_runner check_file_perms ${HOSTS_ALLOW} 644 
+
+  # CIS 4.5.4 Check that /etc/hosts.deny exists
+  func_runner chk_file_exists ${HOSTS_DENY}
+  func_runner chk_hosts_deny_content
+  func_runner check_root_owns ${HOSTS_DENY}
+  func_runner check_file_perms ${HOSTS_DENY} 644 
+
+  # CIS 4.6.1 Check that CIS.conf file should disable uncommon network protocol dccp 
+  func_runner chk_cis_cnf dccp ${CIS_CNF}
+
+  # CIS 4.6.2 Check that CIS.conf file should disable uncommon network protocol sctp 
+  func_runner chk_cis_cnf sctp ${CIS_CNF}
+
+  # CIS 4.6.3 Check that CIS.conf file should disable uncommon network protocol rds 
+  func_runner chk_cis_cnf rds ${CIS_CNF}
+
+  # CIS 4.6.4 Check that CIS.conf file should disable uncommon network protocol tipc 
+  func_runner chk_cis_cnf tipc ${CIS_CNF}
+  
+  # CIS 4.7 Firewalld should be enabled
+  func_runner check_svc_enabled firewalld  
+
+  # CIS 5.1.1 Check that rsyslog is installed
+  func_runner rpm_installed rsyslog
+  
+  # CIS 5.1.2 rsyslog should be enabled
+  func_runner check_svc_enabled rsyslog
+
+  # CIS 5.1.3 Configure rsyslog.conf
+  # This is too environment specific to audit for here 
+
+  # CIS 5.1.4 Check perms on rsyslog.conf
+  func_runner chk_file_exists ${RSYSLOG_CNF}
+  func_runner check_root_owns ${RSYSLOG_CNF}
+  func_runner check_file_perms ${RSYSLOG_CNF} 600 
+  
+  # CIS 5.1.5 rsyslog.conf sending logs to a remote host
+  func_runner chk_rsyslog_content 
+
+  # CIS 5.1.6 This benchmark is only applicable to rsyslog loghosts
+
+  # CIS 5.2.1.1 Audit Log Storage Size should be configured
+  func_runner audit_log_storage_size
+
+  # CIS 5.2.1.2 Disable System on Audit Log Full
+  func_runner dis_on_audit_log_full
+
+  # CIS 5.2.1.3 Disable System on Audit Log Full
+  func_runner keep_all_audit_info
+
+  # CIS 5.2.2 auditd should be enabled
+  func_runner check_svc_enabled auditd
+
+  # CIS 5.2.3
+  func_runner audit_procs_prior_2_auditd
+
+  # CIS 5.2.4 Record events that modify date & time info
+  func_runner audit_date_time
+
+  # CIS 5.2.5 Record events that modify user & group info
+  func_runner audit_user_group
+
+  # CIS 5.2.6 Record events that modify the system's network env
+  func_runner audit_network_env
+
+  # CIS 5.2.7 Record events that modify the system's Mandatory Access Controls
+  func_runner audit_sys_mac
+
+  # CIS 5.2.8 Verify Collection Login and Logout events is configured
+  func_runner audit_logins_logouts
+
+  # CIS 5.2.9 Verify Collection of Session Initiation info is configured
+  func_runner audit_session_init
+
 }
 
 main
