@@ -1,6 +1,9 @@
 Files:
+
 centos7-cis.ks    kickstart profile for CIS CentOS 7 benchmarks
+
 minimal.ks        minimal kickstart profile
+
 cis-audit         bash script to test whether your host meets CIS 7 benchmarks
 
 
