@@ -37,11 +37,17 @@ SYSTEM_AUTH='/etc/pam.d/system-auth'
 PWQUAL_CNF='/etc/security/pwquality.conf'
 PASS_AUTH='/etc/pam.d/password-auth'
 PAM_SU='/etc/pam.d/su'
-GRP='/etc/group'
+GROUP='/etc/group'
 LOGIN_DEFS='/etc/login.defs'
 PASSWD='/etc/passwd'
+SHADOW='/etc/shadow'
+GSHADOW='/etc/gshadow'
 BASHRC='/etc/bashrc'
 PROF_D='/etc/profile.d'
+MOTD='/etc/motd'
+ISSUE='/etc/issue'
+ISSUE_NET='/etc/issue.net'
+BANNER_MSG='/etc/dconf/db/gdm.d/01-banner-message'
 
 function separate_partition {
   # Test that the supplied $1 is a separate partition
@@ -644,7 +650,7 @@ function lim_passwd_reuse {
 
 function su_access {
   egrep "auth[[:space:]]+required" "${PAM_SU}" | grep 'pam_wheel.so' | grep -q 'use_uid' || return
-  grep 'wheel' "${GRP}" | cut -d: -f4 | grep -q 'root' || return
+  grep 'wheel' "${GROUP}" | cut -d: -f4 | grep -q 'root' || return
 }
 
 function dis_sys_accs {
@@ -664,12 +670,44 @@ function root_def_grp {
   [[ "${gid2}" -eq 0 ]] || return
 }
 
-function foo {
+function def_umask_for_users {
   cut -d\#  -f1 "${BASHRC}" | egrep -q "umask[[:space:]]+077" || return
   egrep -q "umask[[:space:]]+077" ${PROF_D}/* || return
 }
 
-function func_runner {
+function inactive_usr_acs_locked {
+  # After being inactive for a period of time the account should be disabled
+  local days
+  local inactive_threshold=35
+  days="$(useradd -D | grep INACTIVE | cut -d= -f2)"
+  [[ ${days} -ge ${inactive_threshold} ]] || return
+}
+
+function warning_banners {
+  # Check that system login banners don't contain any OS information
+  local motd
+  local issue
+  local issue_net
+  motd="$(egrep '(\\v|\\r|\\m|\\s)' ${MOTD})"
+  issue="$(egrep '(\\v|\\r|\\m|\\s)' ${ISSUE})"
+  issue_net="$(egrep '(\\v|\\r|\\m|\\s)' ${ISSUE_NET})"
+  [[ -z "${motd}" ]] || return
+  [[ -z "${issue}" ]] || return
+  [[ -z "${issue_net}" ]] || return
+}
+
+function gnome_banner {
+  # On a host aiming to meet CIS requirements GNOME is unlikely to be installed 
+  # Thus the function says if the file exists then it should have these lines in it
+  if [[ -f "${BANNER_MSG}" ]] ; then
+    egrep '[org/gnome/login-screen]' ${BANNER_MSG} || return
+    egrep 'banner-message-enable=true' ${BANNER_MSG} || return
+    egrep 'banner-message-text=' ${BANNER_MSG} || return
+  fi
+}
+ 
+
+function func_wrapper {
   func_name=$1
   shift
   args=$@
@@ -685,495 +723,535 @@ function func_runner {
 function main {
 
   # CIS 1.1.1 Test that there is a separate /tmp partition
-  func_runner separate_partition /tmp
+  func_wrapper separate_partition /tmp
   
   # CIS 1.1.2 Test that the nodev option is on the /tmp partition
-  func_runner mount_option /tmp nodev
+  func_wrapper mount_option /tmp nodev
 
   # CIS 1.1.3 Test that the nosuid option is on the /tmp partition
-  func_runner mount_option /tmp nosuid
+  func_wrapper mount_option /tmp nosuid
 
   # CIS 1.1.4 Test that the noexec option is on the /tmp partition
-  func_runner mount_option /tmp noexec
+  func_wrapper mount_option /tmp noexec
 
   # CIS 1.1.5 Test that there is a separate /var partition
-  func_runner separate_partition /var
+  func_wrapper separate_partition /var
 
   # CIS 1.1.6 Test that the /var/tmp directory is bind mounted onto the /tmp filesystem
-  func_runner bind_mounted_to /var/tmp /tmp
+  func_wrapper bind_mounted_to /var/tmp /tmp
 
   # CIS 1.1.7 Test that there is a separate /var/log partition
-  func_runner separate_partition /var/log
+  func_wrapper separate_partition /var/log
 
   # CIS 1.1.8 Test that there is a separate /var/log/audit partition
-  func_runner separate_partition /var/log/audit
+  func_wrapper separate_partition /var/log/audit
 
   # CIS 1.1.9 Test that there is a separate /home partition
-  func_runner separate_partition /home
+  func_wrapper separate_partition /home
 
   # CIS 1.1.10 Test that the nodev option is on the /home partition
-  func_runner mount_option /home nodev
+  func_wrapper mount_option /home nodev
 
   # TO DO CIS 1.1.11 nodev option on removable media partitions
   # TO DO CIS 1.1.12 noexec option on removable media partitions
   # TO DO CIS 1.1.13 nosuid option on removable media partitions
 
   # CIS 1.1.14 Test that the nodev option is on the /dev/shm partition
-  func_runner mount_option /dev/shm nodev
+  func_wrapper mount_option /dev/shm nodev
 
   # CIS 1.1.15 Test that the nosuid option is on the /dev/shm partition
-  func_runner mount_option /dev/shm nosuid
+  func_wrapper mount_option /dev/shm nosuid
 
   # CIS 1.1.16 Test that the noexec option is on the /dev/shm partition
-  func_runner mount_option /dev/shm noexec
+  func_wrapper mount_option /dev/shm noexec
 
   # TO DO CIS 1.1.17 Check for the sticky bit on all world writable dirs
-  func_runner sticky_wrld_w_dirs 
+  func_wrapper sticky_wrld_w_dirs 
 
   # CIS 1.1.18 Test that the mounting of cramfs filesystems is disabled  
-  func_runner test_disable_mounting cramfs
+  func_wrapper test_disable_mounting cramfs
 
   # CIS 1.1.19 Test that the mounting of freevxfs filesystems is disabled  
-  func_runner test_disable_mounting freevxfs
+  func_wrapper test_disable_mounting freevxfs
 
   # CIS 1.1.20 Test that the mounting of jffs2 filesystems is disabled  
-  func_runner test_disable_mounting jffs2
+  func_wrapper test_disable_mounting jffs2
 
   # CIS 1.1.21 Test that the mounting of hfs filesystems is disabled  
-  func_runner test_disable_mounting hfs
+  func_wrapper test_disable_mounting hfs
 
   # CIS 1.1.22 Test that the mounting of hfsplus filesystems is disabled  
-  func_runner test_disable_mounting hfsplus
+  func_wrapper test_disable_mounting hfsplus
 
   # CIS 1.1.23 Test that the mounting of squashfs filesystems is disabled  
-  func_runner test_disable_mounting squashfs
+  func_wrapper test_disable_mounting squashfs
 
   # CIS 1.1.24 Test that the mounting of udf filesystems is disabled  
-  func_runner test_disable_mounting udf
+  func_wrapper test_disable_mounting udf
 
   # CIS 1.2.1 Check that the CentOS GPG Key is Installed
-  func_runner centos_gpg_key_installed
+  func_wrapper centos_gpg_key_installed
 
   # CIS 1.2.2 Check that gpgcheck is globally activated
-  func_runner yum_gpgcheck
+  func_wrapper yum_gpgcheck
 
   # CIS 1.2.3 Check software package updates with yum
-  func_runner yum_update
+  func_wrapper yum_update
   
   # CIS 1.2.4 Verify package integrity using RPM
-  func_runner pkg_integrity
+  func_wrapper pkg_integrity
   
   # CIS 1.3.1 Check that the AIDE rpm is installed
-  func_runner rpm_installed aide
+  func_wrapper rpm_installed aide
   
   # CIS 1.3.2 Check periodic execution of file integrity (that aide runs from cron)
-  func_runner verify_aide_cron
+  func_wrapper verify_aide_cron
 
   # CIS 1.4.1 Check that SELinux is not disabled in /boot/grub2/grub.cfg 
-  func_runner verify_selinux_grubcfg
+  func_wrapper verify_selinux_grubcfg
 
   # CIS 1.4.2 Verify SELinux configured state in /etc/selinux/config
-  func_runner verify_selinux_state
+  func_wrapper verify_selinux_state
 
   # CIS 1.4.3 Verify SELinux policy in /etc/selinux/config
-  func_runner verify_selinux_policy
+  func_wrapper verify_selinux_policy
 
   # CIS 1.4.4 Check setroubleshoot RPM is not installed
-  func_runner rpm_not_installed setroubleshoot 
+  func_wrapper rpm_not_installed setroubleshoot 
 
   # CIS 1.4.5 Check setroubleshoot RPM is not installed
-  func_runner rpm_not_installed mcstrans 
+  func_wrapper rpm_not_installed mcstrans 
 
   # CIS 1.4.6 Check for unconfined daemons
-  func_runner unconfined_procs
+  func_wrapper unconfined_procs
   
   # CIS 1.5.1 Check ownership on /boot/grub2/grub.cfg
-  func_runner check_root_owns ${GRUB_CFG}
+  func_wrapper check_root_owns ${GRUB_CFG}
 
   # CIS 1.5.2 Check permissions on /boot/grub2/grub.cfg
-  func_runner check_grub_perms
+  func_wrapper check_grub_perms
 
   # CIS 1.5.3 Check permissions on /boot/grub2/grub.cfg
-  func_runner check_boot_pass
+  func_wrapper check_boot_pass
 
   # TO DO CIS 1.6.1
-  func_runner restrict_core_dumps 
+  func_wrapper restrict_core_dumps 
 
   # CIS 1.6.2 Verify that the flag to force randomized virtual memory region placement is set
-  func_runner chk_sysctl kernel.randomize_va_space 2
+  func_wrapper chk_sysctl kernel.randomize_va_space 2
 
   # TO DO CIS 1.7
-  func_runner chk_latest_rel
+  func_wrapper chk_latest_rel
 
   # CIS 2.1.1 Check telnet-server RPM is not installed
-  func_runner rpm_not_installed telnet-server
+  func_wrapper rpm_not_installed telnet-server
 
   # CIS 2.1.2 Check telnet RPM is not installed
-  func_runner rpm_not_installed telnet
+  func_wrapper rpm_not_installed telnet
 
   # CIS 2.1.3 Check rsh-server RPM is not installed
-  func_runner rpm_not_installed rsh-server
+  func_wrapper rpm_not_installed rsh-server
 
   # CIS 2.1.4 Check rsh RPM is not installed
-  func_runner rpm_not_installed rsh
+  func_wrapper rpm_not_installed rsh
 
   # CIS 2.1.5 Check ypbind RPM is not installed
-  func_runner rpm_not_installed ypbind
+  func_wrapper rpm_not_installed ypbind
 
   # CIS 2.1.6 Check ypserv RPM is not installed
-  func_runner rpm_not_installed ypserv
+  func_wrapper rpm_not_installed ypserv
 
   # CIS 2.1.7 Check tftp RPM is not installed
-  func_runner rpm_not_installed tftp
+  func_wrapper rpm_not_installed tftp
 
   # CIS 2.1.8 Check tftp-server RPM is not installed
-  func_runner rpm_not_installed tftp-server
+  func_wrapper rpm_not_installed tftp-server
 
   # CIS 2.1.9 Check talk RPM is not installed
-  func_runner rpm_not_installed talk
+  func_wrapper rpm_not_installed talk
 
   # CIS 2.1.10 Check talk-server RPM is not installed
-  func_runner rpm_not_installed talk-server
+  func_wrapper rpm_not_installed talk-server
 
   # CIS 2.1.11 Check xinetd RPM is not installed
-  func_runner rpm_not_installed xinetd
+  func_wrapper rpm_not_installed xinetd
 
   # CIS 2.1.12 Check chargen-dgram is not enabled
-  func_runner check_svc_not_enabled chargen-dgram
+  func_wrapper check_svc_not_enabled chargen-dgram
 
   # CIS 2.1.13 Check chargen-stream is not enabled
-  func_runner check_svc_not_enabled chargen-stream
+  func_wrapper check_svc_not_enabled chargen-stream
 
   # CIS 2.1.14 Check daytime-dgram is not enabled
-  func_runner check_svc_not_enabled daytime-dgram
+  func_wrapper check_svc_not_enabled daytime-dgram
   
   # CIS 2.1.15 Check daytime-stream is not enabled
-  func_runner check_svc_not_enabled daytime-stream
+  func_wrapper check_svc_not_enabled daytime-stream
 
   # CIS 2.1.16 Check echo-dgram is not enabled
-  func_runner check_svc_not_enabled echo-dgram
+  func_wrapper check_svc_not_enabled echo-dgram
 
   # CIS 2.1.17 Check echo-dgram is not enabled
-  func_runner check_svc_not_enabled echo-stream
+  func_wrapper check_svc_not_enabled echo-stream
 
   # CIS 2.1.18 Check tcpmux-server is not enabled
-  func_runner check_svc_not_enabled tcpmux-server
+  func_wrapper check_svc_not_enabled tcpmux-server
 
   # CIS 3.1 Check Daemon umask
-  func_runner check_umask 
+  func_wrapper check_umask 
 
   # TODO CIS 3.2  X Window System
-  func_runner check_def_tgt
+  func_wrapper check_def_tgt
 
   # CIS 3.2 Check telnet-server RPM is not installed
-  func_runner rpm_not_installed xorg-x11-server-common
+  func_wrapper rpm_not_installed xorg-x11-server-common
 
   # CIS 3.3 Check avahi-daemon is not enabled
-  func_runner check_svc_not_enabled avahi-daemon
+  func_wrapper check_svc_not_enabled avahi-daemon
 
   # CIS 3.4 Check cups is not enabled
-  func_runner check_svc_not_enabled cups
+  func_wrapper check_svc_not_enabled cups
 
   # CIS 3.5 Check dhcp RPM is not installed
-  func_runner rpm_not_installed dhcp
+  func_wrapper rpm_not_installed dhcp
 
   # CIS 3.6 NTP config
-  func_runner ntp_cfg
+  func_wrapper ntp_cfg
 
   # CIS 3.7.1 Check LDAP RPMs are not installed
-  func_runner rpm_not_installed openldap-servers
-  func_runner rpm_not_installed openldap-clients
+  func_wrapper rpm_not_installed openldap-servers
+  func_wrapper rpm_not_installed openldap-clients
 
   # CIS 3.8 Check NFS and RPC are not enabled
-  func_runner check_svc_not_enabled nfslock
-  func_runner check_svc_not_enabled rpcgssd
-  func_runner check_svc_not_enabled rpcbind
-  func_runner check_svc_not_enabled rpcidmapd
-  func_runner check_svc_not_enabled rpcsvcgssd
+  func_wrapper check_svc_not_enabled nfslock
+  func_wrapper check_svc_not_enabled rpcgssd
+  func_wrapper check_svc_not_enabled rpcbind
+  func_wrapper check_svc_not_enabled rpcidmapd
+  func_wrapper check_svc_not_enabled rpcsvcgssd
 
   # CIS 3.9 Check bind RPM is not installed
-  func_runner rpm_not_installed bind
+  func_wrapper rpm_not_installed bind
 
   # CIS 3.10 Check vsftpd RPM is not installed
-  func_runner rpm_not_installed vsftpd
+  func_wrapper rpm_not_installed vsftpd
 
   # CIS 3.11 Check httpd RPM is not installed
-  func_runner rpm_not_installed httpd
+  func_wrapper rpm_not_installed httpd
 
   # CIS 3.12 Check dovecot RPM is not installed
-  func_runner rpm_not_installed dovecot
+  func_wrapper rpm_not_installed dovecot
 
   # CIS 3.13 Check samba RPM is not installed
-  func_runner rpm_not_installed samba
+  func_wrapper rpm_not_installed samba
 
   # CIS 3.14 Check squid RPM is not installed
-  func_runner rpm_not_installed squid
+  func_wrapper rpm_not_installed squid
 
   # CIS 3.15 Check net-snmp RPM is not installed
-  func_runner rpm_not_installed net-snmp
+  func_wrapper rpm_not_installed net-snmp
 
   # CIS 3.16 MTA in local-only mode
   # Disable for now as function requires netstat and netstat is not part of the build
-  #func_runner mta_local_only
+  #func_wrapper mta_local_only
 
   # CIS 4.1.1 IP Forwarding should be disabled
-  func_runner chk_sysctl net.ipv4.ip_forward 0
+  func_wrapper chk_sysctl net.ipv4.ip_forward 0
 
   # CIS 4.1.2 Send Packet Redirects should be disabled
-  func_runner chk_sysctl net.ipv4.conf.all.send_redirects 0
-  func_runner chk_sysctl net.ipv4.conf.default.send_redirects 0
+  func_wrapper chk_sysctl net.ipv4.conf.all.send_redirects 0
+  func_wrapper chk_sysctl net.ipv4.conf.default.send_redirects 0
 
   # CIS 4.2.1 Source Routed Packet Acceptance should be disabled
-  func_runner chk_sysctl net.ipv4.conf.all.accept_source_route 0
-  func_runner chk_sysctl net.ipv4.conf.default.accept_source_route 0
+  func_wrapper chk_sysctl net.ipv4.conf.all.accept_source_route 0
+  func_wrapper chk_sysctl net.ipv4.conf.default.accept_source_route 0
 
   # CIS 4.2.2 ICMP Redirect Acceptance should be disabled
-  func_runner chk_sysctl net.ipv4.conf.all.accept_redirects 0
-  func_runner chk_sysctl net.ipv4.conf.default.accept_redirects 0
+  func_wrapper chk_sysctl net.ipv4.conf.all.accept_redirects 0
+  func_wrapper chk_sysctl net.ipv4.conf.default.accept_redirects 0
 
   # CIS 4.2.3 ICMP Redirect Acceptance should be disabled
-  func_runner chk_sysctl net.ipv4.conf.all.secure_redirects 0
-  func_runner chk_sysctl net.ipv4.conf.all.secure_redirects 0
-  func_runner chk_sysctl net.ipv4.conf.default.secure_redirects 0
+  func_wrapper chk_sysctl net.ipv4.conf.all.secure_redirects 0
+  func_wrapper chk_sysctl net.ipv4.conf.all.secure_redirects 0
+  func_wrapper chk_sysctl net.ipv4.conf.default.secure_redirects 0
 
   # CIS 4.2.4 Log Suspicious Packets
-  func_runner chk_sysctl net.ipv4.conf.all.log_martians 1
-  func_runner chk_sysctl net.ipv4.conf.default.log_martians 1
+  func_wrapper chk_sysctl net.ipv4.conf.all.log_martians 1
+  func_wrapper chk_sysctl net.ipv4.conf.default.log_martians 1
 
   # CIS 4.2.5 Ignore Broadcast Requests should be enabled
-  func_runner chk_sysctl net.ipv4.icmp_echo_ignore_broadcasts 1
+  func_wrapper chk_sysctl net.ipv4.icmp_echo_ignore_broadcasts 1
 
   # CIS 4.2.6 Bad Error Message Protection should be enabled
-  func_runner chk_sysctl net.ipv4.icmp_ignore_bogus_error_responses 1
+  func_wrapper chk_sysctl net.ipv4.icmp_ignore_bogus_error_responses 1
 
   # CIS 4.2.7 RFC-recommended Source Route Validation should be enabled
-  func_runner chk_sysctl net.ipv4.conf.all.rp_filter 1
-  func_runner chk_sysctl net.ipv4.conf.default.rp_filter 1
+  func_wrapper chk_sysctl net.ipv4.conf.all.rp_filter 1
+  func_wrapper chk_sysctl net.ipv4.conf.default.rp_filter 1
 
   # CIS 4.2.8 TCP SYN Cookies should be enabled
-  func_runner chk_sysctl net.ipv4.tcp_syncookies 1
+  func_wrapper chk_sysctl net.ipv4.tcp_syncookies 1
 
   # TODO CIS 4.3.1 Check Wireless Interfaces are deactivated
 
   # CIS 4.4.1.1 If IPv6 enabled IPv6 Router Advertisements should be disabled
-  func_runner ip6_router_advertisements_dis
+  func_wrapper ip6_router_advertisements_dis
 
   # CIS 4.4.1.2 If IPv6 enabled IPv6 Redirect Acceptance should be disabled
-  func_runner ip6_redirect_accept_dis
+  func_wrapper ip6_redirect_accept_dis
 
   # CIS 4.4.2 IPv6 disabled
-  func_runner chk_sysctl net.ipv6.conf.all.disable_ipv6 1
+  func_wrapper chk_sysctl net.ipv6.conf.all.disable_ipv6 1
 
   # CIS 4.5.1 Check that TCP Wrappers are installed
-  func_runner rpm_installed tcp_wrappers
+  func_wrapper rpm_installed tcp_wrappers
   
   # CIS 4.5.2 Check that /etc/hosts.allow exists
-  func_runner chk_file_exists ${HOSTS_ALLOW}
+  func_wrapper chk_file_exists ${HOSTS_ALLOW}
   
   # CIS 4.5.3 Verify permissions on /etc/hosts.allow
-  func_runner check_root_owns ${HOSTS_ALLOW}
-  func_runner check_file_perms ${HOSTS_ALLOW} 644 
+  func_wrapper check_root_owns ${HOSTS_ALLOW}
+  func_wrapper check_file_perms ${HOSTS_ALLOW} 644 
 
   # CIS 4.5.4 Check that /etc/hosts.deny exists
-  func_runner chk_file_exists ${HOSTS_DENY}
-  func_runner chk_hosts_deny_content
-  func_runner check_root_owns ${HOSTS_DENY}
-  func_runner check_file_perms ${HOSTS_DENY} 644 
+  func_wrapper chk_file_exists ${HOSTS_DENY}
+  func_wrapper chk_hosts_deny_content
+  func_wrapper check_root_owns ${HOSTS_DENY}
+  func_wrapper check_file_perms ${HOSTS_DENY} 644 
 
   # CIS 4.6.1 Check that CIS.conf file should disable uncommon network protocol dccp 
-  func_runner chk_cis_cnf dccp ${CIS_CNF}
+  func_wrapper chk_cis_cnf dccp ${CIS_CNF}
 
   # CIS 4.6.2 Check that CIS.conf file should disable uncommon network protocol sctp 
-  func_runner chk_cis_cnf sctp ${CIS_CNF}
+  func_wrapper chk_cis_cnf sctp ${CIS_CNF}
 
   # CIS 4.6.3 Check that CIS.conf file should disable uncommon network protocol rds 
-  func_runner chk_cis_cnf rds ${CIS_CNF}
+  func_wrapper chk_cis_cnf rds ${CIS_CNF}
 
   # CIS 4.6.4 Check that CIS.conf file should disable uncommon network protocol tipc 
-  func_runner chk_cis_cnf tipc ${CIS_CNF}
+  func_wrapper chk_cis_cnf tipc ${CIS_CNF}
   
   # CIS 4.7 Firewalld should be enabled
-  func_runner check_svc_enabled firewalld  
+  func_wrapper check_svc_enabled firewalld  
 
   # CIS 5.1.1 Check that rsyslog is installed
-  func_runner rpm_installed rsyslog
+  func_wrapper rpm_installed rsyslog
   
   # CIS 5.1.2 rsyslog should be enabled
-  func_runner check_svc_enabled rsyslog
+  func_wrapper check_svc_enabled rsyslog
 
   # CIS 5.1.3 Configure rsyslog.conf
   # This is too environment specific to audit for here 
 
   # CIS 5.1.4 Check perms on rsyslog.conf
-  func_runner chk_file_exists ${RSYSLOG_CNF}
-  func_runner check_root_owns ${RSYSLOG_CNF}
-  func_runner check_file_perms ${RSYSLOG_CNF} 600 
+  func_wrapper chk_file_exists ${RSYSLOG_CNF}
+  func_wrapper check_root_owns ${RSYSLOG_CNF}
+  func_wrapper check_file_perms ${RSYSLOG_CNF} 600 
   
   # CIS 5.1.5 rsyslog.conf sending logs to a remote host
-  func_runner chk_rsyslog_content 
+  func_wrapper chk_rsyslog_content 
 
   # CIS 5.1.6 This benchmark is only applicable to rsyslog loghosts
 
   # CIS 5.2.1.1 Audit Log Storage Size should be configured
-  func_runner audit_log_storage_size
+  func_wrapper audit_log_storage_size
 
   # CIS 5.2.1.2 Disable System on Audit Log Full
-  func_runner dis_on_audit_log_full
+  func_wrapper dis_on_audit_log_full
 
   # CIS 5.2.1.3 Disable System on Audit Log Full
-  func_runner keep_all_audit_info
+  func_wrapper keep_all_audit_info
 
   # CIS 5.2.2 auditd should be enabled
-  func_runner check_svc_enabled auditd
+  func_wrapper check_svc_enabled auditd
 
   # CIS 5.2.3
-  func_runner audit_procs_prior_2_auditd
+  func_wrapper audit_procs_prior_2_auditd
 
   # CIS 5.2.4 Record events that modify date & time info
-  func_runner audit_date_time
+  func_wrapper audit_date_time
 
   # CIS 5.2.5 Record events that modify user & group info
-  func_runner audit_user_group
+  func_wrapper audit_user_group
 
   # CIS 5.2.6 Record events that modify the system's network env
-  func_runner audit_network_env
+  func_wrapper audit_network_env
 
   # CIS 5.2.7 Record events that modify the system's Mandatory Access Controls
-  func_runner audit_sys_mac
+  func_wrapper audit_sys_mac
 
   # CIS 5.2.8 Verify Collection Login and Logout events is configured
-  func_runner audit_logins_logouts
+  func_wrapper audit_logins_logouts
 
   # CIS 5.2.9 Verify Collection of Session Initiation info is configured
-  func_runner audit_session_init
+  func_wrapper audit_session_init
 
   # CIS 5.2.10 Verify Collection of Discretionary Access Control permission modification events
-  func_runner audit_dac_perm_mod_events
+  func_wrapper audit_dac_perm_mod_events
 
   # CIS 5.2.11 Verify collection of unsuccessful unauthorized access attempts to files
-  func_runner unsuc_unauth_acc_attempts
+  func_wrapper unsuc_unauth_acc_attempts
 
   # CIS 5.2.12 Verify collection of privileged commands
-  func_runner coll_priv_cmds
+  func_wrapper coll_priv_cmds
 
   # CIS 5.2.13 Verify collection of privileged commands
-  func_runner coll_suc_fs_mnts
+  func_wrapper coll_suc_fs_mnts
 
   # CIS 5.2.14 Verify collection of privileged commands
-  func_runner coll_file_del_events
+  func_wrapper coll_file_del_events
 
   # CIS 5.2.15 Verify collection of privileged commands
-  func_runner coll_chg2_sysadm_scope
+  func_wrapper coll_chg2_sysadm_scope
 
   # CIS 5.2.16 Verify collection of privileged commands
-  func_runner coll_sysadm_actions 
+  func_wrapper coll_sysadm_actions 
 
   # CIS 5.2.17 Verify collection of Kernel Module Loading and Unloading
-  func_runner kmod_lod_unlod
+  func_wrapper kmod_lod_unlod
 
   # CIS 5.2.18 Verify collection of Kernel Module Loading and Unloading
-  func_runner audit_cfg_immut
+  func_wrapper audit_cfg_immut
 
   # CIS 5.3 Log rotate should be configured
-  func_runner logrotate_cfg
+  func_wrapper logrotate_cfg
 
   # CIS 6.1.1 cron and anacron config
-  func_runner rpm_installed cronie-anacron
+  func_wrapper rpm_installed cronie-anacron
 
   # CIS 6.1.2 enable crond daemon
-  func_runner check_svc_enabled crond
+  func_wrapper check_svc_enabled crond
 
   # CIS 6.1.3-6.1.8 user/group owner and perms on 
   # /etc/anacrontab /etc/crontab /etc/cron.hourly /etc/cron.daily /etc/cron.weekly /etc/cron.monthly /etc/cron.d
 
   for file in ${ANACRONTAB} ${CRONTAB} ${CRON_HOURLY} ${CRON_DAILY} ${CRON_WEEKLY} ${CRON_MONTHLY} ${CRON_DIR} ; do
-    func_runner check_root_owns "${file}"
-    func_runner check_file_perms "${file}" 600 
+    func_wrapper check_root_owns "${file}"
+    func_wrapper check_file_perms "${file}" 600 
   done
 
   # CIS 6.1.10 at daemon config
-  func_runner atd_cfg
+  func_wrapper atd_cfg
 
   # CIS 6.1.11 restrict at/cron to authorized users
-  func_runner at_cron_auth_users
+  func_wrapper at_cron_auth_users
 
   # CIS 6.2.1 SSH protocol should be 2
-  func_runner chk_param "${SSHD_CFG}" Protocol 2
+  func_wrapper chk_param "${SSHD_CFG}" Protocol 2
 
   # CIS 6.2.2 LogLevel to INFO
-  func_runner chk_param "${SSHD_CFG}" LogLevel INFO
+  func_wrapper chk_param "${SSHD_CFG}" LogLevel INFO
   
   # CIS 6.2.3 Permissions on sshd_config
-  func_runner check_root_owns "${SSHD_CFG}"
-  func_runner check_file_perms "${SSHD_CFG}" 600 
+  func_wrapper check_root_owns "${SSHD_CFG}"
+  func_wrapper check_file_perms "${SSHD_CFG}" 600 
 
   # CIS 6.2.4 SSH X11Forwarding 
-  func_runner chk_param "${SSHD_CFG}" X11Forwarding no
+  func_wrapper chk_param "${SSHD_CFG}" X11Forwarding no
   
   # CIS 6.2.5 SSH MaxAuthTries 
-  func_runner ssh_maxauthtries 4
+  func_wrapper ssh_maxauthtries 4
   
   # CIS 6.2.6 SSH X11Forwarding 
-  func_runner chk_param "${SSHD_CFG}" IgnoreRhosts yes
+  func_wrapper chk_param "${SSHD_CFG}" IgnoreRhosts yes
   
   # CIS 6.2.7 SSH HostbasedAuthentication
-  func_runner chk_param "${SSHD_CFG}" HostbasedAuthentication no
+  func_wrapper chk_param "${SSHD_CFG}" HostbasedAuthentication no
   
   # CIS 6.2.8 SSH PermitRootLogin
-  func_runner chk_param "${SSHD_CFG}" PermitRootLogin no
+  func_wrapper chk_param "${SSHD_CFG}" PermitRootLogin no
   
   # CIS 6.2.9 SSH PermitEmptyPasswords
-  func_runner chk_param "${SSHD_CFG}" PermitEmptyPasswords no
+  func_wrapper chk_param "${SSHD_CFG}" PermitEmptyPasswords no
   
   # CIS 6.2.10 SSH PermitUserEnvironment
-  func_runner chk_param "${SSHD_CFG}" PermitUserEnvironment no
+  func_wrapper chk_param "${SSHD_CFG}" PermitUserEnvironment no
   
   # CIS 6.2.11 SSH Ciphers
-  func_runner chk_param "${SSHD_CFG}" Ciphers aes128-ctr,aes192-ctr,aes256-ctr
+  func_wrapper chk_param "${SSHD_CFG}" Ciphers aes128-ctr,aes192-ctr,aes256-ctr
   
   # CIS 6.2.12 SSH Idle Timeout Interval for User Login
-  func_runner chk_param "${SSHD_CFG}" ClientAliveInterval 300
-  func_runner chk_param "${SSHD_CFG}" ClientAliveCountMax 0
+  func_wrapper chk_param "${SSHD_CFG}" ClientAliveInterval 300
+  func_wrapper chk_param "${SSHD_CFG}" ClientAliveCountMax 0
   
   # CIS 6.2.13 Limit access to SSH
-  func_runner ssh_access
+  func_wrapper ssh_access
   
   # CIS 6.2.14 SSH banner
-  func_runner chk_param "${SSHD_CFG}" Banner /etc/issue.net
+  func_wrapper chk_param "${SSHD_CFG}" Banner /etc/issue.net
 
   # CIS 6.3.1 SHA-512 password hashing algorithm
-  func_runner pass_hash_algo sha512
+  func_wrapper pass_hash_algo sha512
 
   # CIS 6.3.2 password creation requirement parameters using pam_pwquality
-  func_runner pass_req_params 
+  func_wrapper pass_req_params 
 
   # CIS 6.3.3 Set lockout for failed password attempts
-  func_runner failed_pass_lock
+  func_wrapper failed_pass_lock
 
   # CIS 6.3.4 Limit password reuse
-  func_runner lim_passwd_reuse 
+  func_wrapper lim_passwd_reuse 
 
   # CIS 6.4 Restrict root login to system console
   # This is too env specific to put a check in for
 
   # CIS 6.5 Restrict access to su
-  func_runner su_access
+  func_wrapper su_access
 
   # CIS 7.1.1 Password expiration days
-  func_runner chk_param "${LOGIN_DEFS}" PASS_MAX_DAYS 90
+  func_wrapper chk_param "${LOGIN_DEFS}" PASS_MAX_DAYS 90
 
   # CIS 7.1.2 Password change minimum number of days
-  func_runner chk_param "${LOGIN_DEFS}" PASS_MIN_DAYS 7
+  func_wrapper chk_param "${LOGIN_DEFS}" PASS_MIN_DAYS 7
 
   # CIS 7.1.3 Password expiring warning days
-  func_runner chk_param "${LOGIN_DEFS}" PASS_WARN_AGE 7
+  func_wrapper chk_param "${LOGIN_DEFS}" PASS_WARN_AGE 7
 
   # CIS 7.2 Disable System Accounts
-  func_runner dis_sys_accs
+  func_wrapper dis_sys_accs
 
   # CIS 7.3 Default group for root account
-  func_runner root_def_grp
+  func_wrapper root_def_grp
 
+  # CIS 7.4 Default group for root account
+  func_wrapper def_umask_for_users 
+
+  # CIS 7.5 Inactive User accounts should be locked
+  func_wrapper inactive_usr_acs_locked
+  
+  # CIS 8.1 user/group owner and perms on 
+  # /etc/motd /etc/issue /etc/issue.net
+
+  for file in ${MOTD} ${ISSUE} ${ISSUE_NET} ; do
+    func_wrapper check_root_owns "${file}"
+    func_wrapper check_file_perms "${file}" 644 
+  done
+
+  # CIS 8.2 OS Information should not be in Login Warning Banners
+  func_wrapper warning_banners
+  
+  # CIS 8.3 Set GNOME Warning Banner
+  # On a host aiming to meet CIS requirements GNOME is unlikely to be installed 
+  # Thus the function says if the file exists then it should have these lines in it
+  func_wrapper gnome_banner
+  
+  # CIS 9.1.2 Verify perms on /etc/passwd 
+  func_wrapper check_file_perms "${PASSWD}" 644 
+  
+  # CIS 9.1.3 Verify perms on /etc/shadow 
+  func_wrapper check_file_perms "${SHADOW}" 0
+
+  # CIS 9.1.4 Verify perms on /etc/gshadow 
+  func_wrapper check_file_perms "${GSHADOW}" 0 
+
+  # CIS 9.1.5 Verify perms on /etc/group 
+  func_wrapper check_file_perms "${GROUP}" 644 
+
+  # CIS 9.1.6-9 user/group owner and perms on /etc/passwd /etc/shadow /etc/gshadow /etc/group
+  for file in ${PASSWD} ${SHADOW} ${GSHADOW} ${GROUP} ; do
+    func_wrapper check_root_owns "${file}"
+  done
+
+    
 }
 
 main
