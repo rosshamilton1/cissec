@@ -313,6 +313,9 @@ function chk_cis_cnf {
 } 
 
 function chk_rsyslog_content {
+  # rsyslog should be configured to send logs to a remote host
+  # grep output should resemble 
+  # *.* @@loghost.example.com
   grep -q "^*.*[^I][^I]*@" ${RSYSLOG_CNF} || return
 }
 
@@ -335,7 +338,7 @@ function keep_all_audit_info {
 }
 
 function audit_procs_prior_2_auditd {
-  # Check lines that start with linux has the audit=1 parameter set
+  # Check lines that start with linux have the audit=1 parameter set
   grep_grub="$(grep "^[[:space:]]*linux" ${GRUB_CFG} | grep -v 'audit=1')"
   [[ -z "${grep_grub}" ]] || return
 }
