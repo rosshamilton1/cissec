@@ -284,7 +284,7 @@ line_num=$(grep -n "^\# Ciphers and keying" ${sshd_config} | cut -d: -f1)
 sed -i "${line_num} a Ciphers aes128-ctr,aes192-ctr,aes256-ctr" ${sshd_config}	# CIS 6.2.11
 sed -i "s/\#ClientAliveInterval 0/ClientAliveInterval 300/" ${sshd_config}	# CIS 6.2.12
 sed -i "s/\#ClientAliveCountMax 3/ClientAliveCountMax 0/" ${sshd_config}	# CIS 6.2.12
-sed -i "s/\#Banner none/Banner \/etc\/issue\.net" ${sshd_config}    	# CIS 6.2.12
+sed -i "s/\#Banner none/Banner \/etc\/issue\.net/" ${sshd_config}    	# CIS 6.2.12
 
 
 login_defs=/etc/login.defs
