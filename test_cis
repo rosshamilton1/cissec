@@ -20,6 +20,28 @@ CIS_CNF='/etc/modprobe.d/CIS.conf'
 RSYSLOG_CNF='/etc/rsyslog.conf'
 AUDITD_CNF='/etc/audit/auditd.conf'
 AUDIT_RULES='/etc/audit/audit.rules'
+LOGR_SYSLOG='/etc/logrotate.d/syslog'
+ANACRONTAB='/etc/anacrontab'
+CRONTAB='/etc/crontab'
+CRON_HOURLY='/etc/cron.hourly'
+CRON_DAILY='/etc/cron.daily'
+CRON_WEEKLY='/etc/cron.weekly'
+CRON_MONTHLY='/etc/cron.monthly'
+CRON_DIR='/etc/cron.d'
+AT_ALLOW='/etc/at.allow'
+AT_DENY='/etc/at.deny'
+CRON_ALLOW='/etc/cron.allow'
+CRON_DENY='/etc/cron.deny'
+SSHD_CFG='/etc/ssh/sshd_config'
+SYSTEM_AUTH='/etc/pam.d/system-auth'
+PWQUAL_CNF='/etc/security/pwquality.conf'
+PASS_AUTH='/etc/pam.d/password-auth'
+PAM_SU='/etc/pam.d/su'
+GRP='/etc/group'
+LOGIN_DEFS='/etc/login.defs'
+PASSWD='/etc/passwd'
+BASHRC='/etc/bashrc'
+PROF_D='/etc/profile.d'
 
 function separate_partition {
   # Test that the supplied $1 is a separate partition
@@ -98,7 +120,8 @@ function rpm_installed {
 
   local rpm="${1}"
   local rpm_out
-  rpm -q $rpm | cut -d- -f1 | grep -q "${rpm}" || return
+  rpm_out="$(rpm -q --queryformat "%{NAME}\n" ${rpm})"
+  [[ "${rpm}" = "${rpm_out}" ]] || return
 }
 
 function verify_aide_cron {
@@ -131,7 +154,7 @@ function verify_selinux_policy {
 function rpm_not_installed {
   # Check that the supplied rpm $1 is not installed
   local rpm="${1}"
-  rpm -q $rpm | grep -q "package ${rpm} is not installed" || return
+  rpm -q ${rpm} | grep -q "package ${rpm} is not installed" || return
 }
 
 function unconfined_procs {
@@ -241,6 +264,8 @@ function check_umask {
 
 function check_def_tgt {
   #Check that the default boot target is multi-user.target 
+  local default_tgt
+  default_tgt="$(systemctl get-default)"
   [[ "${default_tgt}" = "multi-user.target" ]] || return
 }
 
@@ -385,12 +410,268 @@ function audit_sys_mac {
   | egrep -q "\-w[[:space:]]+\/etc\/selinux\/" || return
 }
 
+function audit_dac_perm_mod_events {
+  # Confirm that perm_mod lines matching the patterns below do appear in the audit.rules file
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+perm_mod" | egrep "\-S[[:space:]]+chmod" \
+  | egrep "\-S[[:space:]]+fchmod" | egrep "\-S[[:space:]]+fchmodat" | egrep "\-F[[:space:]]+arch=b64" \
+  | egrep "\-F[[:space:]]+auid>=1000" | egrep "\-F[[:space:]]+auid\!=4294967295" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+perm_mod" | egrep "\-S[[:space:]]+chmod" \
+  | egrep "\-S[[:space:]]+fchmod" | egrep "\-S[[:space:]]+fchmodat" | egrep "\-F[[:space:]]+arch=b32" \
+  | egrep "\-F[[:space:]]+auid>=1000" | egrep "\-F[[:space:]]+auid\!=4294967295" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+perm_mod" | egrep "\-S[[:space:]]+chown" \
+  | egrep "\-S[[:space:]]+fchown" | egrep "\-S[[:space:]]+fchownat" | egrep "\-S[[:space:]]+fchown" \
+  | egrep "\-F[[:space:]]+arch=b64" | egrep "\-F[[:space:]]+auid>=1000" | egrep "\-F[[:space:]]+auid\!=4294967295" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+perm_mod" | egrep "\-S[[:space:]]+chown" \
+  | egrep "\-S[[:space:]]+fchown" | egrep "\-S[[:space:]]+fchownat" | egrep "\-S[[:space:]]+fchown" \
+  | egrep "\-F[[:space:]]+arch=b32" | egrep "\-F[[:space:]]+auid>=1000" | egrep "\-F[[:space:]]+auid\!=4294967295" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+  
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+perm_mod" | egrep "\-S[[:space:]]+setxattr" \
+  | egrep "\-S[[:space:]]+lsetxattr" | egrep "\-S[[:space:]]+fsetxattr" | egrep "\-S[[:space:]]+removexattr" \
+  | egrep "\-S[[:space:]]+lremovexattr" | egrep "\-S[[:space:]]+fremovexattr" | egrep "\-F[[:space:]]+arch=b64" \
+  | egrep "\-F[[:space:]]+auid>=1000" | egrep "\-F[[:space:]]+auid\!=4294967295" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+perm_mod" | egrep "\-S[[:space:]]+setxattr" \
+  | egrep "\-S[[:space:]]+lsetxattr" | egrep "\-S[[:space:]]+fsetxattr" | egrep "\-S[[:space:]]+removexattr" \
+  | egrep "\-S[[:space:]]+lremovexattr" | egrep "\-S[[:space:]]+fremovexattr" | egrep "\-F[[:space:]]+arch=b32" \
+  | egrep "\-F[[:space:]]+auid>=1000" | egrep "\-F[[:space:]]+auid\!=4294967295" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+}
+
+function unsuc_unauth_acc_attempts {
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+access" | egrep "\-S[[:space:]]+creat" \
+  | egrep "\-S[[:space:]]+open" | egrep "\-S[[:space:]]+openat" | egrep "\-S[[:space:]]+truncate" \
+  | egrep "\-S[[:space:]]+ftruncate" | egrep "\-F[[:space:]]+arch=b64" | egrep "\-F[[:space:]]+auid>=1000" \
+  | egrep "\-F[[:space:]]+auid\!=4294967295" | egrep "\-F[[:space:]]exit=\-EACCES" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+access" | egrep "\-S[[:space:]]+creat" \
+  | egrep "\-S[[:space:]]+open" | egrep "\-S[[:space:]]+openat" | egrep "\-S[[:space:]]+truncate" \
+  | egrep "\-S[[:space:]]+ftruncate" | egrep "\-F[[:space:]]+arch=b32" | egrep "\-F[[:space:]]+auid>=1000" \
+  | egrep "\-F[[:space:]]+auid\!=4294967295" | egrep "\-F[[:space:]]exit=\-EACCES" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+access" | egrep "\-S[[:space:]]+creat" \
+  | egrep "\-S[[:space:]]+open" | egrep "\-S[[:space:]]+openat" | egrep "\-S[[:space:]]+truncate" \
+  | egrep "\-S[[:space:]]+ftruncate" | egrep "\-F[[:space:]]+arch=b64" | egrep "\-F[[:space:]]+auid>=1000" \
+  | egrep "\-F[[:space:]]+auid\!=4294967295" | egrep "\-F[[:space:]]exit=\-EPERM" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+access" | egrep "\-S[[:space:]]+creat" \
+  | egrep "\-S[[:space:]]+open" | egrep "\-S[[:space:]]+openat" | egrep "\-S[[:space:]]+truncate" \
+  | egrep "\-S[[:space:]]+ftruncate" | egrep "\-F[[:space:]]+arch=b32" | egrep "\-F[[:space:]]+auid>=1000" \
+  | egrep "\-F[[:space:]]+auid\!=4294967295" | egrep "\-F[[:space:]]exit=\-EPERM" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+
+}
+
+function coll_priv_cmds {
+  local priv_cmds
+  priv_cmds="$(find / -xdev \( -perm -4000 -o -perm -2000 \) -type f)"
+  for cmd in ${priv_cmds} ; do
+    cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+privileged" | egrep "\-F[[:space:]]+path=${cmd}" \
+    | egrep "\-F[[:space:]]+perm=x" | egrep "\-F[[:space:]]+auid>=1000" | egrep "\-F[[:space:]]+auid\!=4294967295" \
+    | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+  done
+}
+
+function coll_suc_fs_mnts {
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+mounts" | egrep "\-S[[:space:]]+mount" \
+  | egrep "\-F[[:space:]]+arch=b64" | egrep "\-F[[:space:]]+auid>=1000" \
+  | egrep "\-F[[:space:]]+auid\!=4294967295" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+mounts" | egrep "\-S[[:space:]]+mount" \
+  | egrep "\-F[[:space:]]+arch=b32" | egrep "\-F[[:space:]]+auid>=1000" \
+  | egrep "\-F[[:space:]]+auid\!=4294967295" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+}
+
+function coll_file_del_events {
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+delete" | egrep "\-S[[:space:]]+unlink" \
+  | egrep "\-F[[:space:]]+arch=b64" | egrep "\-S[[:space:]]+unlinkat" | egrep "\-S[[:space:]]+rename" \
+  | egrep "\-S[[:space:]]+renameat" | egrep "\-F[[:space:]]+auid>=1000" \
+  | egrep "\-F[[:space:]]+auid\!=4294967295" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+delete" | egrep "\-S[[:space:]]+unlink" \
+  | egrep "\-F[[:space:]]+arch=b32" | egrep "\-S[[:space:]]+unlinkat" | egrep "\-S[[:space:]]+rename" \
+  | egrep "\-S[[:space:]]+renameat" | egrep "\-F[[:space:]]+auid>=1000" \
+  | egrep "\-F[[:space:]]+auid\!=4294967295" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+
+}
+
+function coll_chg2_sysadm_scope {
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+scope" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/etc\/sudoers" || return
+
+}
+
+function coll_sysadm_actions {
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+actions" | egrep "\-p[[:space:]]+wa" \
+  | egrep -q "\-w[[:space:]]+\/var\/log\/sudo.log" || return
+
+}
+
+function kmod_lod_unlod {
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+modules" | egrep "\-p[[:space:]]+x" \
+  | egrep -q "\-w[[:space:]]+\/sbin\/insmod" || return
+
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+modules" | egrep "\-p[[:space:]]+x" \
+  | egrep -q "\-w[[:space:]]+\/sbin\/rmmod" || return
+
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+modules" | egrep "\-p[[:space:]]+x" \
+  | egrep -q "\-w[[:space:]]+\/sbin\/modprobe" || return
+
+  cut -d\# -f1 ${AUDIT_RULES} | egrep "\-k[[:space:]]+modules" | egrep "\-S[[:space:]]+delete_module" \
+  | egrep "\-F[[:space:]]+arch=b64" | egrep "\-S[[:space:]]+init_module" \
+  | egrep -q "\-a[[:space:]]+always,exit|\-a[[:space:]]+exit,always" || return
+}
+
+function audit_cfg_immut {
+  # There should be a "-e 2" at the end of the audit.rules file
+  cut -d\# -f1 ${AUDIT_RULES} | egrep -q "^-e[[:space:]]+2" || return
+}
+
+function logrotate_cfg {
+  [[ -f "${LOGR_SYSLOG}" ]] || return
+
+  local timestamp
+  timestamp=$(date '+%Y%m%d_%H%M%S')
+  local tmp_data="/tmp/logrotate.tmp.${timestamp}"
+  local file_list="/var/log/messages /var/log/secure /var/log/maillog /var/log/spooler /var/log/boot.log /var/log/cron"
+  local line_num
+  line_num=$(grep -n '{' "${LOGR_SYSLOG}" | cut -d: -f1)
+  line_num=$((${line_num} - 1))
+  head -${line_num} "${LOGR_SYSLOG}" > ${tmp_data}
+  for file in ${file_list} ; do
+    grep -q "${file}" ${tmp_data} || return
+  done
+  rm "${tmp_data}" 
+}
+
+function atd_cfg {
+ [[ ! -f ${AT_DENY} ]] || return 
+ [[ -f ${AT_ALLOW} ]] || return 
+ check_root_owns "${AT_ALLOW}"
+ check_file_perms "${AT_ALLOW}" 600 
+}
+
+function at_cron_auth_users {
+ [[ ! -f ${AT_DENY} ]] || return 
+ [[ ! -f ${CRON_DENY} ]] || return 
+ check_root_owns "${CRON_ALLOW}"
+ check_root_owns "${AT_ALLOW}"
+ check_file_perms "${CRON_ALLOW}" 600 
+ check_file_perms "${AT_ALLOW}" 600 
+}
+
+function chk_param {
+  local file="${1}" 
+  local parameter="${2}" 
+  local value="${3}" 
+  cut -d\# -f1 ${file} | egrep -q "^${parameter}[[:space:]]+${value}" || return
+}
+
+
+function ssh_maxauthtries {
+  local allowed_max="${1}"
+  local actual_value
+  actual_value=$(cut -d\# -f1 ${SSHD_CFG} | grep 'MaxAuthTries' | cut -d" " -f2)
+  [[ ${actual_value} -le ${allowed_max} ]] || return 
+}
+
+function ssh_access {
+  local allow_users
+  local allow_groups
+  local deny_users
+  local deny_users
+  allow_users="$(cut -d\# -f1 ${SSHD_CFG} | grep "AllowUsers" | cut -d" " -f2)"
+  allow_groups="$(cut -d\# -f1 ${SSHD_CFG} | grep "AllowGroups" | cut -d" " -f2)"
+  deny_users="$(cut -d\# -f1 ${SSHD_CFG} | grep "DenyUsers" | cut -d" " -f2)"
+  deny_groups="$(cut -d\# -f1 ${SSHD_CFG} | grep "DenyGroups" | cut -d" " -f2)"
+  [[ -n "${allow_users}" ]] || return
+  [[ -n "${allow_groups}" ]] || return
+  [[ -n "${deny_users}" ]] || return
+  [[ -n "${deny_groups}" ]] || return
+}
+
+function pass_hash_algo {
+  local algo="${1}"
+  authconfig --test | grep 'hashing' | grep -q "${algo}" || return
+}
+
+function pass_req_params {
+  # verify the pam_pwquality.so params in /etc/pam.d/system-auth
+  grep pam_pwquality.so ${SYSTEM_AUTH} | grep 'password' | grep 'requisite' | grep 'try_first_pass' | grep 'local_users_only' | grep 'retry=3' | grep -q 'authtok_type=' || return
+  grep -q 'minlen=14' ${PWQUAL_CNF} || return
+  grep -q 'dcredit=-1' ${PWQUAL_CNF} || return
+  grep -q 'ucredit=-1' ${PWQUAL_CNF} || return
+  grep -q 'ocredit=-1' ${PWQUAL_CNF} || return
+  grep -q 'lcredit=-1' ${PWQUAL_CNF} || return
+}
+
+function failed_pass_lock {
+ egrep "auth[[:space:]]+required" ${PASS_AUTH} | grep -q 'pam_deny.so' || return
+ egrep "auth[[:space:]]+required" ${PASS_AUTH} | grep 'pam_faillock.so' | grep 'preauth' | grep 'audit' | grep 'silent' | grep 'deny=5' | grep -q 'unlock_time=900' || return
+ grep 'auth' ${PASS_AUTH} | grep 'pam_unix.so' | egrep -q "\[success=1[[:space:]]+default=bad\]" || return
+ grep 'auth' ${PASS_AUTH} | grep 'pam_faillock.so' | grep 'authfail' | grep 'audit' | grep 'deny=5' | grep 'unlock_time=900' | egrep -q "\[default=die\]" || return
+ egrep "auth[[:space:]]+sufficient" ${PASS_AUTH} | grep 'pam_faillock.so' | grep 'authsucc' | grep 'audit' | grep 'deny=5' | grep -q 'unlock_time=900' || return
+ egrep "auth[[:space:]]+required" ${PASS_AUTH} | grep -q 'pam_deny.so' || return
+
+ egrep "auth[[:space:]]+required" ${SYSTEM_AUTH} | grep -q 'pam_env.so' || return
+ egrep "auth[[:space:]]+required" ${SYSTEM_AUTH} | grep 'pam_faillock.so' | grep 'preauth' | grep 'audit' | grep 'silent' | grep 'deny=5' | grep -q 'unlock_time=900' || return
+ grep 'auth' ${SYSTEM_AUTH} | grep 'pam_unix.so' | egrep -q "\[success=1[[:space:]]+default=bad\]" || return
+ grep 'auth' ${SYSTEM_AUTH} | grep 'pam_faillock.so' | grep 'authfail' | grep 'audit' | grep 'deny=5' | grep 'unlock_time=900' | egrep -q "\[default=die\]" || return
+ egrep "auth[[:space:]]+sufficient" ${SYSTEM_AUTH} | grep 'pam_faillock.so' | grep 'authsucc' | grep 'audit' | grep 'deny=5' | grep -q 'unlock_time=900' || return
+ egrep "auth[[:space:]]+required" ${SYSTEM_AUTH} | grep -q 'pam_deny.so' || return
+}
+
+function lim_passwd_reuse {
+ egrep "auth[[:space:]]+sufficient" ${SYSTEM_AUTH} | grep 'pam_unix.so' | grep -q 'remember=5' || return
+}
+
+function su_access {
+  egrep "auth[[:space:]]+required" "${PAM_SU}" | grep 'pam_wheel.so' | grep -q 'use_uid' || return
+  grep 'wheel' "${GRP}" | cut -d: -f4 | grep -q 'root' || return
+}
+
+function dis_sys_accs {
+  # Check that system accounts are disabled
+  local accounts 
+  accounts="$(egrep -v "^\+" /etc/passwd | awk -F: '($1!="root" && $1!="sync" && $1!="shutdown" \
+&& $1!="halt" && $3<1000 && $7!="/sbin/nologin") {print}')"
+  [[ -z "${accounts}" ]] || return
+}
+
+function root_def_grp {
+  local gid1
+  local gid2
+  gid1="$(grep "^root:" "${PASSWD}" | cut -d: -f4)" 
+  [[ "${gid1}" -eq 0 ]] || return
+  gid2="$(id -g root)" 
+  [[ "${gid2}" -eq 0 ]] || return
+}
+
+function foo {
+  cut -d\#  -f1 "${BASHRC}" | egrep -q "umask[[:space:]]+077" || return
+  egrep -q "umask[[:space:]]+077" ${PROF_D}/* || return
+}
+
 function func_runner {
   func_name=$1
   shift
   args=$@
   ${func_name} ${args}
-  if [[ $? -eq 0 ]]; then
+  if [[ "$?" -eq 0 ]]; then
     echo ${func_name} ${args} OK
   else
     echo ${func_name} ${args} ERROR
@@ -762,6 +1043,133 @@ function main {
 
   # CIS 5.2.9 Verify Collection of Session Initiation info is configured
   func_runner audit_session_init
+
+  # CIS 5.2.10 Verify Collection of Discretionary Access Control permission modification events
+  func_runner audit_dac_perm_mod_events
+
+  # CIS 5.2.11 Verify collection of unsuccessful unauthorized access attempts to files
+  func_runner unsuc_unauth_acc_attempts
+
+  # CIS 5.2.12 Verify collection of privileged commands
+  func_runner coll_priv_cmds
+
+  # CIS 5.2.13 Verify collection of privileged commands
+  func_runner coll_suc_fs_mnts
+
+  # CIS 5.2.14 Verify collection of privileged commands
+  func_runner coll_file_del_events
+
+  # CIS 5.2.15 Verify collection of privileged commands
+  func_runner coll_chg2_sysadm_scope
+
+  # CIS 5.2.16 Verify collection of privileged commands
+  func_runner coll_sysadm_actions 
+
+  # CIS 5.2.17 Verify collection of Kernel Module Loading and Unloading
+  func_runner kmod_lod_unlod
+
+  # CIS 5.2.18 Verify collection of Kernel Module Loading and Unloading
+  func_runner audit_cfg_immut
+
+  # CIS 5.3 Log rotate should be configured
+  func_runner logrotate_cfg
+
+  # CIS 6.1.1 cron and anacron config
+  func_runner rpm_installed cronie-anacron
+
+  # CIS 6.1.2 enable crond daemon
+  func_runner check_svc_enabled crond
+
+  # CIS 6.1.3-6.1.8 user/group owner and perms on 
+  # /etc/anacrontab /etc/crontab /etc/cron.hourly /etc/cron.daily /etc/cron.weekly /etc/cron.monthly /etc/cron.d
+
+  for file in ${ANACRONTAB} ${CRONTAB} ${CRON_HOURLY} ${CRON_DAILY} ${CRON_WEEKLY} ${CRON_MONTHLY} ${CRON_DIR} ; do
+    func_runner check_root_owns "${file}"
+    func_runner check_file_perms "${file}" 600 
+  done
+
+  # CIS 6.1.10 at daemon config
+  func_runner atd_cfg
+
+  # CIS 6.1.11 restrict at/cron to authorized users
+  func_runner at_cron_auth_users
+
+  # CIS 6.2.1 SSH protocol should be 2
+  func_runner chk_param "${SSHD_CFG}" Protocol 2
+
+  # CIS 6.2.2 LogLevel to INFO
+  func_runner chk_param "${SSHD_CFG}" LogLevel INFO
+  
+  # CIS 6.2.3 Permissions on sshd_config
+  func_runner check_root_owns "${SSHD_CFG}"
+  func_runner check_file_perms "${SSHD_CFG}" 600 
+
+  # CIS 6.2.4 SSH X11Forwarding 
+  func_runner chk_param "${SSHD_CFG}" X11Forwarding no
+  
+  # CIS 6.2.5 SSH MaxAuthTries 
+  func_runner ssh_maxauthtries 4
+  
+  # CIS 6.2.6 SSH X11Forwarding 
+  func_runner chk_param "${SSHD_CFG}" IgnoreRhosts yes
+  
+  # CIS 6.2.7 SSH HostbasedAuthentication
+  func_runner chk_param "${SSHD_CFG}" HostbasedAuthentication no
+  
+  # CIS 6.2.8 SSH PermitRootLogin
+  func_runner chk_param "${SSHD_CFG}" PermitRootLogin no
+  
+  # CIS 6.2.9 SSH PermitEmptyPasswords
+  func_runner chk_param "${SSHD_CFG}" PermitEmptyPasswords no
+  
+  # CIS 6.2.10 SSH PermitUserEnvironment
+  func_runner chk_param "${SSHD_CFG}" PermitUserEnvironment no
+  
+  # CIS 6.2.11 SSH Ciphers
+  func_runner chk_param "${SSHD_CFG}" Ciphers aes128-ctr,aes192-ctr,aes256-ctr
+  
+  # CIS 6.2.12 SSH Idle Timeout Interval for User Login
+  func_runner chk_param "${SSHD_CFG}" ClientAliveInterval 300
+  func_runner chk_param "${SSHD_CFG}" ClientAliveCountMax 0
+  
+  # CIS 6.2.13 Limit access to SSH
+  func_runner ssh_access
+  
+  # CIS 6.2.14 SSH banner
+  func_runner chk_param "${SSHD_CFG}" Banner /etc/issue.net
+
+  # CIS 6.3.1 SHA-512 password hashing algorithm
+  func_runner pass_hash_algo sha512
+
+  # CIS 6.3.2 password creation requirement parameters using pam_pwquality
+  func_runner pass_req_params 
+
+  # CIS 6.3.3 Set lockout for failed password attempts
+  func_runner failed_pass_lock
+
+  # CIS 6.3.4 Limit password reuse
+  func_runner lim_passwd_reuse 
+
+  # CIS 6.4 Restrict root login to system console
+  # This is too env specific to put a check in for
+
+  # CIS 6.5 Restrict access to su
+  func_runner su_access
+
+  # CIS 7.1.1 Password expiration days
+  func_runner chk_param "${LOGIN_DEFS}" PASS_MAX_DAYS 90
+
+  # CIS 7.1.2 Password change minimum number of days
+  func_runner chk_param "${LOGIN_DEFS}" PASS_MIN_DAYS 7
+
+  # CIS 7.1.3 Password expiring warning days
+  func_runner chk_param "${LOGIN_DEFS}" PASS_WARN_AGE 7
+
+  # CIS 7.2 Disable System Accounts
+  func_runner dis_sys_accs
+
+  # CIS 7.3 Default group for root account
+  func_runner root_def_grp
 
 }
 
