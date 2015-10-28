@@ -367,6 +367,11 @@ line_num="$(grep -n "^\#auth[[:space:]]*required[[:space:]]*pam_wheel.so[[:space
 sed -i "${line_num} a auth		required	pam_wheel.so use_uid" ${pam_su}
 usermod -G wheel root
 
+# CIS 9.2.6 If /root/bin doesn't exist we fail this check I'm electing to change /root/.bash_profile
+# Just adding a /root/bin dir may be better
+sed -i 's/^PATH.*$/PATH=\$PATH/' /root/.bash_profile
+
+
 # Install AIDE     						# CIS 1.3.1
 echo "0 5 * * * /usr/sbin/aide --check" >> /var/spool/cron/root
 #Initialise last so it doesn't pick up changes made by the post-install of the KS

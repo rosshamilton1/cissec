@@ -705,8 +705,101 @@ function gnome_banner {
     egrep 'banner-message-text=' ${BANNER_MSG} || return
   fi
 }
+
+function unowned_files {
+  local uo_files
+  uo_files="$(df --local -P | awk {'if (NR!=1) print $6'} | xargs -I '{}' find '{}' -xdev -nouser)"
+  [[ -z "${uo_files}" ]] || return
+}
  
 
+function ungrouped_files {
+  local ug_files
+  ug_files="$(df --local -P | awk {'if (NR!=1) print $6'} | xargs -I '{}' find '{}' -xdev -nogroup)"
+  [[ -z "${ug_files}" ]] || return
+}
+
+function suid_exes {
+  # For every suid exe on the host use the rpm cmd to verify that it should be suid executable
+  # If the rpm cmd returns no output then the rpm is as it was when it was installed so no prob
+  local suid_exes
+  suid_exes="$(df --local -P | awk {'if (NR!=1) print $6'} | xargs -I '{}' find '{}' -xdev -type f -perm -4000 -print)"
+  for suid_exe in ${suid_exes}
+  do
+    rpm_out="$(rpm -V $(rpm -qf ${suid_exe}))"
+    [[ -z "${rpm_out}" ]] || return
+  done
+}
+ 
+function sgid_exes {
+  # For every sgid exe on the host use the rpm cmd to verify that it should be sgid executable
+  # If the rpm cmd returns no output then the rpm is as it was when it was installed so no prob
+  local sgid_exes
+  sgid_exes="$(df --local -P | awk {'if (NR!=1) print $6'} | xargs -I '{}' find '{}' -xdev -type f -perm -4000 -print)"
+  for sgid_exe in ${sgid_exes}
+  do
+    rpm_out="$(rpm -V $(rpm -qf ${sgid_exe}))"
+    [[ -z "${rpm_out}" ]] || return
+  done
+}
+
+function passwd_field_chk {
+  local shadow_out
+  shadow_out="$(awk -F: '($2 == "" ) { print $1 }' ${SHADOW})"
+  [[ -z "${shadow_out}" ]] || return
+}
+
+function nis_in_file {
+  # Check for lines starting with + in the supplied file $1 
+  # In /etc/{passwd,shadow,group} it used to be a marker to insert data from NIS 
+  # There shouldn't be any entries like this
+  local file="${1}"
+  local grep_out
+  grep_out="$(grep '^+:' ${file})"
+  [[ -z "${grep_out}" ]] || return
+}
+
+function no_uid0_other_root {
+  local grep_passwd
+  grep_passwd="$(awk -F: '($3 == 0) { print $1 }' ${PASSWD})"
+  [[ "${grep_passwd}" = "root" ]] || return  
+}
+
+function root_path {
+  # There should not be an empty dir in $PATH
+  local grep=/bin/grep
+  local sed=/bin/sed
+  path_grep="$(echo ${PATH} | ${grep} '::')"
+  [[ -z "${path_grep}" ]] || return 
+
+  # There should not be a trailing : on $PATH
+  path_grep="$(echo ${PATH} | ${grep} :$)"
+  [[ -z "${path_grep}" ]] || return 
+
+  path_dirs="$(echo $PATH | ${sed} -e 's/::/:/' -e 's/:$//' -e 's/:/ /g')"
+  for dir in ${path_dirs} ; do
+    # PATH should not contain .
+    [[ "${dir}" != "." ]] || return
+
+    #$dir should be a directory
+    [[ -d "${dir}" ]] || return
+
+    # 6th byte of ls output is the field for group writable
+    # The dirs in PATH should not be group writable e.g. equal to w we are expecting -
+    local ls_out
+    ls_out="$(ls -ldH ${dir})" 
+    [[ "${ls_out:5:1}" = "-" ]] || return
+
+    # 9th byte of ls output is the field for other writable
+    # The dirs in PATH should not be other writable e.g. equal to w we are expecting -
+    [[ "${ls_out:8:1}" = "-" ]] || return
+
+    # Directory should be owned by root
+    dir_own="$(echo ${ls_out} | awk '{print $3}')"
+    [[ "${dir_own}" = "root" ]] || return
+  done
+}
+ 
 function func_wrapper {
   func_name=$1
   shift
@@ -1251,7 +1344,37 @@ function main {
     func_wrapper check_root_owns "${file}"
   done
 
+  # CIS 9.1.11 Shouldn't have any unowned files & dirs
+  func_wrapper unowned_files
     
+  # CIS 9.1.12 Shouldn't have any ungrouped files & dirs
+  func_wrapper ungrouped_files
+
+  # CIS 9.1.13 Check for suid executables
+  func_wrapper suid_exes
+
+  # CIS 9.1.14 Check for sgid executables
+  func_wrapper sgid_exes
+
+  # CIS 9.2.1 Ensure password fields are not empty
+  func_wrapper passwd_field_chk
+
+  # CIS 9.2.2 Verify no legacy "+" entries exist in /etc/passwd
+  func_wrapper nis_in_file ${PASSWD}
+
+  # CIS 9.2.3 Verify no legacy "+" entries exist in /etc/shadow
+  func_wrapper nis_in_file ${SHADOW}
+
+  # CIS 9.2.4 Verify no legacy "+" entries exist in /etc/group
+  func_wrapper nis_in_file ${GROUP}
+
+  # CIS 9.2.5 Verify no UID 0 accounts exist other than root
+  func_wrapper no_uid0_other_root
+  
+  
+  # CIS 9.2.6 Ensure root PATH integrity
+  func_wrapper root_path
+
 }
 
 main
