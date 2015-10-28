@@ -1,7 +1,17 @@
 #!/bin/bash
 
+#This script will run through several checks and for each check output to the terminal 'OK' or 'ERROR
+#The checks are designed to test whether or not the host conforms to the benchmarks in the
+#following document
 #https://benchmarks.cisecurity.org/tools2/linux/CIS_CentOS_Linux_7_Benchmark_v1.1.0.pdf
 
+#This is aimed to be a starting point for a sysadmin to check or audit hosts he/she supports
+#It's envisaged that it will need customising to suit a particular environment
+#e.g. there are about 200 checks, someone may want to chop out X of them to suit their environment
+#The script does not change anything on the host, mostly it runs a lot of greps & cuts 
+#on config files.
+#To quickly get an idea of what this script does have a look at the 'main' and 'func_wrapper' functions  
+#Copyright (c) 2015, Ross Hamilton. All rights reserved.
 
 FSTAB='/etc/fstab'
 YUM_CONF='/etc/yum.conf'

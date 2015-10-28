@@ -1,3 +1,8 @@
+#!/usr/bin/env python
+
+#Copyright (c) 2015, Ross Hamilton. All rights reserved.
+#Licenced under the BSD Licence See LICENCE file for details
+
 install
 lang en_GB.UTF-8
 keyboard --vckeymap=gb --xlayouts='gb'
