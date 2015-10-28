@@ -801,10 +801,22 @@ function root_path {
   done
 }
 
+function is_group_readable {
+  local ls_output="${1}"
+  # 5th byte of ls output is the field for group readable
+  [[ "${ls_output:4:1}" = "r" ]] || return
+}
+
 function is_group_writable {
   local ls_output="${1}"
   # 6th byte of ls output is the field for group writable
   [[ "${ls_output:5:1}" = "w" ]] || return
+}
+
+function is_group_executable {
+  local ls_output="${1}"
+  # 7th byte of ls output is the field for group readable
+  [[ "${ls_output:6:1}" = "r" ]] || return
 }
 
 function is_other_readable {
@@ -822,9 +834,8 @@ function is_other_writable {
 function is_other_executable {
   local ls_output="${1}"
   # 10th byte of ls output is the field for other executable
-  [[ "${ls_output:9:1}" = "-" ]] || return
+  [[ "${ls_output:9:1}" = "x" ]] || return
 }
-
  
 function home_dir_perms {
   dirs="$(grep -v 'root|halt|sync|shutdown' ${PASSWD} | awk -F: '($7 != "/sbin/nologin") { print $6 }')"
@@ -853,6 +864,74 @@ function dot_file_perms {
       fi 
     done
   done
+}
+
+function dot_rhosts_files {
+  dirs="$(grep -v 'root|halt|sync|shutdown' ${PASSWD} | awk -F: '($7 != "/sbin/nologin") { print $6 }')"
+  for dir in ${dirs} ; do
+    [[ -d "${dir}" ]] || continue
+    local file="${dir}/.rhosts"
+    if [[ ! -h "${file}" && -f "${file}" ]] ; then
+      return 1
+    else
+      return 0
+    fi
+  done
+}
+
+function chk_groups_passwd {
+  # We don't want to see any groups in /etc/passwd that aren't in /etc/group
+  group_ids="$(cut -s -d: -f4 ${PASSWD} | sort -u)"
+  for group_id in ${group_ids} ; do
+    grep -q -P "^.*?:x:${group_id}:" ${GROUP} || return
+  done
+}
+
+function chk_home_dirs_exist {
+  #Check that users home directory do all exist
+  while read user uid dir ; do
+    if [[ "${uid}" -ge 1000 && ! -d "${dir}" && "${user}" != "nfsnobody" ]] ; then
+      return 1 
+    fi
+  done < <(awk -F: '{ print $1 " " $3 " " $6 }' ${PASSWD})
+}
+
+function chk_home_dirs_owns {
+  #Check that users home directory do all exist
+  while read user uid dir ; do
+    if [[ "${uid}" -ge 1000 && ! -d "${dir}" && "${user}" != "nfsnobody" ]] ; then
+      local owner
+      owner="$(stat -L -c "%U" "${dir}")"
+      [[ "${owner}" = "${user}" ]] || return
+    fi
+  done < <(awk -F: '{ print $1 " " $3 " " $6 }' ${PASSWD})
+}
+
+function dot_netrc_perms {
+  dirs="$(grep -v 'root|halt|sync|shutdown' ${PASSWD} | awk -F: '($7 != "/sbin/nologin") { print $6 }')"
+  for dir in ${dirs} ; do
+    [[ -d "${dir}" ]] || continue
+    for file in ${dir}/.netrc ; do
+      if [[ ! -h "${file}" && -f "${file}" ]] ; then
+        local ls_out
+        ls_out="$(ls -ldH ${dir})"
+        if is_group_readable ${ls_out} ; then return 1 ; else return 0 ; fi 
+        if is_group_writable ${ls_out} ; then return 1 ; else return 0 ; fi
+        if is_group_executable ${ls_out} ; then return 1 ; else return 0 ; fi
+        if is_other_readable ${ls_out} ; then return 1 ; else return 0 ; fi 
+        if is_other_writable ${ls_out} ; then return 1 ; else return 0 ; fi
+        if is_other_executable ${ls_out} ; then return 1 ; else return 0 ; fi
+      fi 
+    done
+  done
+}
+
+function duplicate_uids {
+  local num_of_uids
+  local uniq_num_of_uids
+  num_of_uids="$(cut -f3 -d":" ${PASSWD} | wc -l)"
+  uniq_num_of_uids="$(cut -f3 -d":" ${PASSWD} | sort -n | uniq | wc -l)" 
+  [[ "${num_of_uids}" -eq "${uniq_num_of_uids}" ]] || return
 }
 
 function func_wrapper {
@@ -1437,6 +1516,25 @@ function main {
 
   # CIS 9.2.8 User dot file permissions
   func_wrapper dot_file_perms
+
+  # CIS 9.2.9 User .netrc permissions
+  func_wrapper dot_netrc_perms
+
+  # CIS 9.2.10 User .rhosts files
+  func_wrapper dot_rhosts_files
+
+  # CIS 9.2.11 User .rhosts files
+  func_wrapper chk_groups_passwd
+
+  # CIS 9.2.12 User .rhosts files
+  func_wrapper chk_home_dirs_exist
+
+  # CIS 9.2.13 Check home directory ownership
+  func_wrapper chk_home_dirs_owns
+
+  # CIS 9.2.14 Check for Duplicate UIDs
+  func_wrapper duplicate_uids
+
 
 }
 
